@@ -57,6 +57,13 @@ Each rule fixed a failure we heard:
 Typical results: every line in order and on time; the model sometimes adds an echo in a long instrumental outro or
 ends it early. Lyric errors in Whisper's text are sung as they are.
 
+## Other models
+
+The front end (transcription, lyric sections, tempo and key, reference choice) is not tied to YuE2. We also drove
+ACE-Step 1.5 XL with it (cover task, the song's sections, tempo and key, the singer's clip as reference audio, with and
+without a singer LoRA). It runs end to end and is about three times faster, but in our listening test the voice and the
+arrangement were clearly worse than YuE2's, so this repository ships the YuE2 back end only.
+
 ## Requirements
 
 - Linux, an NVIDIA GPU with 12 GB or more (peak 8.5 GB in our runs), ~20 GB of disk for the models.
@@ -174,6 +181,9 @@ The code is Apache 2.0, but the model weights are not; see [Licenses](#licenses)
 **yue2-cover：基于 YuE2 的开源 AI 翻唱（AI 歌声翻唱、AI cover）流程。** 用 **你的歌手的声音** 重新演唱一首歌，
 伴奏由模型 **重新编曲**，旋律、歌词和结构保持原曲。基于 M-A-P 的 YuE2，配合 SheetSage2 扒谱和 Whisper 歌词对时，
 单张显卡本地运行。不需要 LoRA 或微调，只需要几段 30 秒左右的演唱片段（零样本声音前缀）。针对中文流行歌调过，英文歌也能用。
+
+前半段（扒谱、歌词分段、速度和调性、选参考片段）不绑定 YuE2：我们也用它驱动过 ACE-Step 1.5 XL，能完整跑通、速度快三倍左右，
+但试听下来声音和编曲都明显不如 YuE2，所以仓库里只放 YuE2 的后端。
 
 和 RVC、so-vits-svc、SoulX-SVC 这类换声翻唱不同：换声保留原伴奏、只换人声音色；yue2-cover 重新生成演唱和伴奏，
 没有分轨残留，编曲风格也可以改。

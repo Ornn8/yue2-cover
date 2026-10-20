@@ -27,6 +27,10 @@
 - Align the reference clip's first sung note to its score; pad to a 25 Hz codec frame boundary.
 - Settings: AR CFG 1.0, NAR 64 ODE steps, seed 42. About real time on an RTX 3090, 8.5 GB peak.
 
+## Other models
+
+- The front end also drove ACE-Step 1.5 XL (cover task, singer clip as reference audio): it runs end to end and is ~3x faster, but sounded clearly worse than YuE2, so only the YuE2 back end ships.
+
 ## Related
 
 - [YuE2](https://github.com/multimodal-art-projection/YuE), [YuE2-3B](https://huggingface.co/m-a-p/YuE2-3B), [SheetSage2](https://huggingface.co/m-a-p/SheetSage2), [MERT-v2-FullSong](https://huggingface.co/m-a-p/MERT-v2-FullSong)
