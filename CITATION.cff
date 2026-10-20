@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use yue2-cover, please cite it and the YuE2 models it builds on."
+title: "yue2-cover: AI song covers in your singer's voice with YuE2"
+type: software
+authors:
+  - alias: Ornn8
+repository-code: "https://github.com/Ornn8/yue2-cover"
+license: Apache-2.0
+version: 0.1.0
+date-released: "2026-10-21"
+keywords:
+  - YuE2
+  - AI cover
+  - song cover
+  - singing voice synthesis
+  - music generation
+  - voice prefix
+  - SheetSage2
+  - lead sheet
+  - Whisper
+  - Mandarin
+references:
+  - type: article
+    title: "YuE2: Unifying Symbolic and Audio Music Generation at Frontier Quality"
+    authors:
+      - family-names: Yuan
+        given-names: Ruibin
+      - name: "the YuE2 authors"
+    journal: "arXiv preprint arXiv:2609.33757"
+    year: 2026

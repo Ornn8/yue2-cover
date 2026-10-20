@@ -1,0 +1,33 @@
+# yue2-cover
+
+> Open-source pipeline for AI song covers with YuE2 (M-A-P): re-sings any song in a chosen singer's voice over a newly
+> generated arrangement, keeping the song's melody, lyrics and structure. Zero-shot voice prefix (no LoRA, no
+> fine-tuning), SheetSage2 lead-sheet transcription, Whisper lyric timing. Runs on one NVIDIA GPU (12 GB+).
+> Code: Apache-2.0. Model weights: CC BY-NC 4.0 (YuE2 adds a permission for individual creators).
+
+## Use it
+
+- [README](https://github.com/Ornn8/yue2-cover/blob/main/README.md): setup, model downloads, reference library, run, FAQ
+- Run a cover: `python yue2_cover/job.py --source song.mp3 --output cover.wav --work work/song1 [--lyrics-file lyrics.txt] [--arrangement "acoustic ballad"]`
+- Add a singer clip: `python tools/add_reference.py --clip clip.flac --lyrics-file clip.txt --id singer-01`
+
+## How it works
+
+- [job.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/job.py): score -> asr -> plan -> encode -> generate, one process per step
+- [plan.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/plan.py): reference choice by tempo, composite ABC score, section-tagged lyrics, held line-end ties
+- [prefix_sampling.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/prefix_sampling.py): YuE2 semantic sampling with the singer's tokens as forced history
+- [encode_impl.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/encode_impl.py): audio -> YuE2 semantic tokens with the community real-audio tokenizer head (MERT-v2 features)
+
+## Key findings
+
+- One tempo for the whole composite score; mixed tempos make YuE2 drift into speech.
+- Lyrics in YuE2's native [Verse]/[Chorus] blocks per score section; one block drifts.
+- Tie held line-final same-pitch notes only where a line has more notes than syllables.
+- Whisper without previous-text conditioning; drop credit/subtitle hallucinations and stray English over instrumentals.
+- Align the reference clip's first sung note to its score; pad to a 25 Hz codec frame boundary.
+- Settings: AR CFG 1.0, NAR 64 ODE steps, seed 42. About real time on an RTX 3090, 8.5 GB peak.
+
+## Related
+
+- [YuE2](https://github.com/multimodal-art-projection/YuE), [YuE2-3B](https://huggingface.co/m-a-p/YuE2-3B), [SheetSage2](https://huggingface.co/m-a-p/SheetSage2), [MERT-v2-FullSong](https://huggingface.co/m-a-p/MERT-v2-FullSong)
+- [Real-audio tokenizer head and NAR LoRA](https://huggingface.co/Mothersuperior/yue2-mothersuperior-realaudio-tokenizer-v4)

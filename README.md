@@ -1,10 +1,18 @@
-# yue2-cover
+# yue2-cover: AI song covers in your singer's voice with YuE2
 
-Re-sing a song in **your singer's voice** over a **newly generated arrangement**, while keeping the song's melody,
-lyrics and structure. Built on [YuE2](https://github.com/multimodal-art-projection/YuE) by M-A-P; no fine-tuning of
-the singer is needed, only a few 30-second clips of their singing.
+**yue2-cover** is an open-source pipeline for **AI cover songs**: it re-sings any song in **your singer's voice** over
+a **newly generated arrangement**, while keeping the song's original melody, lyrics and structure. It runs locally on
+one GPU (tested on an RTX 3090) and is built on [YuE2](https://github.com/multimodal-art-projection/YuE) by M-A-P,
+with SheetSage2 lead-sheet transcription and Whisper lyric timing. No fine-tuning of the singer is needed: a few
+30-second clips of their singing are enough (a zero-shot **voice prefix**). Tuned on Mandarin (C-pop) songs; English
+songs work too.
 
-[中文说明](#中文说明)
+- Keeps the melody and the lyric timing of the original song, section by section.
+- Regenerates the accompaniment from a style text ("acoustic guitar ballad", ...), unlike voice-conversion (SVC/RVC)
+  covers that keep the original backing track.
+- One command: `python yue2_cover/job.py --source song.mp3 --output cover.wav --work work/song1`.
+
+[中文说明](#中文说明) · [FAQ](#faq)
 
 ## How it works
 
@@ -112,6 +120,34 @@ failed with the measured clip tempo 60.609 BPM and sang the whole song with 60.6
 Tests (CPU only): `python tests/test_plan_and_tools.py`; `python yue2_cover/encode_impl.py --self-test` checks the
 tokenizer scripts against the pinned hashes.
 
+## FAQ
+
+**How do I make an AI cover of a song in a specific singer's voice with YuE2?**
+Build a reference library of the singer with `tools/add_reference.py` (a few 25-40 s clips at different tempos),
+then run `yue2_cover/job.py` on the song. The pipeline transcribes the song, picks the clip nearest in tempo, encodes
+it into YuE2 semantic tokens and lets YuE2 continue singing in that voice over the song's own score.
+
+**How is this different from RVC / so-vits-svc / SoulX-SVC covers?**
+Voice conversion keeps the original recording and swaps the timbre of the separated vocal. yue2-cover generates a
+new performance and a new arrangement, so there is no source-separation residue and the arrangement can change
+style. The trade-off: it is slower (about real time on a 3090) and the lyrics must be right.
+
+**Does it need a LoRA or fine-tuning?**
+No. The voice comes from a forced prefix of the singer's own recording. YuE2's weights stay unchanged.
+
+**Does it keep the original melody?**
+Yes. The score YuE2 sings from is SheetSage2's transcription of the song itself, with one tempo for the whole score,
+lyrics placed in the native section blocks and held line ends tied (see "What we learned").
+
+**What hardware does it need?**
+An NVIDIA GPU with 12 GB or more; a 228 s song took 230 s on an RTX 3090 with an 8.5 GB peak.
+
+**Which languages?**
+The rules are tuned for Mandarin Chinese; English songs work with `--asr-prompt ''` (no note ties are added).
+
+**Can I use it commercially?**
+The code is Apache 2.0, but the model weights are not; see [Licenses](#licenses).
+
 ## Licenses
 
 - This repository's code: Apache License 2.0.
@@ -135,8 +171,12 @@ tokenizer scripts against the pinned hashes.
 
 ## 中文说明
 
-用 **你的歌手的声音** 重新演唱一首歌，伴奏由模型 **重新编曲**，旋律、歌词和结构保持原曲。基于 M-A-P 的
-YuE2，不需要给歌手做微调，只需要几段 30 秒左右的演唱片段。
+**yue2-cover：基于 YuE2 的开源 AI 翻唱（AI 歌声翻唱、AI cover）流程。** 用 **你的歌手的声音** 重新演唱一首歌，
+伴奏由模型 **重新编曲**，旋律、歌词和结构保持原曲。基于 M-A-P 的 YuE2，配合 SheetSage2 扒谱和 Whisper 歌词对时，
+单张显卡本地运行。不需要 LoRA 或微调，只需要几段 30 秒左右的演唱片段（零样本声音前缀）。针对中文流行歌调过，英文歌也能用。
+
+和 RVC、so-vits-svc、SoulX-SVC 这类换声翻唱不同：换声保留原伴奏、只换人声音色；yue2-cover 重新生成演唱和伴奏，
+没有分轨残留，编曲风格也可以改。
 
 **原理**：SheetSage2 把原曲扒成谱（旋律、和弦、段落、节拍），Whisper 给出逐字时间，把歌词分配到各段。
 从歌手片段库里选速度最接近的一段，拉伸对齐后编码成 YuE2 的语义 token，作为强制前缀放在生成序列最前面；
