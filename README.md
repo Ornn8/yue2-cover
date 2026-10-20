@@ -1,0 +1,157 @@
+# yue2-cover
+
+Re-sing a song in **your singer's voice** over a **newly generated arrangement**, while keeping the song's melody,
+lyrics and structure. Built on [YuE2](https://github.com/multimodal-art-projection/YuE) by M-A-P; no fine-tuning of
+the singer is needed, only a few 30-second clips of their singing.
+
+[中文说明](#中文说明)
+
+## How it works
+
+```
+song.mp3 ─► SheetSage2 ─► lead sheet (melody, chords, sections, beats)
+        └─► Whisper ─────► word timings ─► lyric lines placed in the score's sections
+                                   │
+singer's clip library ─► nearest tempo ─► composite ABC score: [reference bars][song bars]
+                                   │        section-tagged lyrics, held line ends tied
+reference clip ─► stretch + align ─► real-audio tokenizer ─► YuE2 semantic tokens (forced prefix)
+                                   │
+                       YuE2 AR (CFG 1) continues the prefix over the song's score
+                       YuE2 NAR (joint-v9 LoRA, 64 ODE steps) ─► audio, prefix cut off ─► cover.wav
+```
+
+YuE2 normally writes its own score and voice. Here the score is the song's own transcription, and the first bars are
+a real recording of your singer, encoded into YuE2's semantic tokens and forced into the model's history. The model
+then continues singing *as that voice* through the song's melody, with an arrangement it generates itself from the
+style text.
+
+## What we learned (the rules in `plan.py`)
+
+Each rule fixed a failure we heard:
+
+1. **One tempo for the whole composite score.** When the reference section kept its own tempo, the model followed
+   the audio's tempo and slid into speech. Pick the library clip nearest the song's tempo and stretch it as little
+   as possible (at most 1.18x; otherwise no reference fits).
+2. **Lyrics in YuE2's native section blocks.** One `[Verse]` / `[Chorus]` block per `% label` section of the score,
+   in order, with empty blocks for instrumental sections. All lyrics in one block drift after the first section.
+3. **Tie held line ends only where needed.** SheetSage splits a held line-final note into two same-pitch attacks and
+   YuE re-sings the last syllable. For Chinese (one character = one syllable), a line with more notes than syllables
+   gets its line-end same-pitch pair tied; nothing else is changed. Whisper word times run ~0.4 s early, so notes
+   are counted against syllables, not decided from timing alone.
+4. **Clean Whisper text.** No previous-text conditioning (long songs loop on one line); a simplified-Chinese prompt
+   on every window; credit and subtitle hallucinations ("作词", "字幕…") are dropped, and so is stray English heard
+   over the instrumental parts of a Chinese song. Passing the real lyrics (`--lyrics-file`) is always better.
+5. **Exact reference alignment.** The clip is shifted so its first sung note lands where its score puts it, then
+   padded to a 25 Hz codec-frame boundary. Reference lengths just over a multiple of 30 s are avoided (the MERT
+   feature extractor drops a sub-second tail).
+6. **Settings:** AR CFG 1.0, NAR 64 ODE steps, seed 42.
+
+Typical results: every line in order and on time; the model sometimes adds an echo in a long instrumental outro or
+ends it early. Lyric errors in Whisper's text are sung as they are.
+
+## Requirements
+
+- Linux, an NVIDIA GPU with 12 GB or more (peak 8.5 GB in our runs), ~20 GB of disk for the models.
+- **YuE2 environment** (Python 3.12): `yue2-infer` 0.1.6 from the [YuE repository](https://github.com/multimodal-art-projection/YuE)
+  (release `yue2-v0.1.6`), torch 2.10 (CUDA 12.8), transformers 4.57, `openai-whisper` ≥ 20250625, numpy, scipy,
+  soundfile, safetensors.
+- **SheetSage2 environment** (we use Python 3.10, torch 2.8, transformers 4.45; it can be the same environment if
+  SheetSage2's remote code runs there).
+- ffmpeg 5 or newer (tested with 6.1).
+
+## Setup
+
+```bash
+export YUE2_COVER_HOME=~/yue2-cover-data           # every path below can also be set on its own, see yue2_cover/paths.py
+for m in YuE2-3B YuE2-Vae SheetSage2 MERT-v2-FullSong; do
+  huggingface-cli download m-a-p/$m --local-dir $YUE2_COVER_HOME/models/$m
+done
+huggingface-cli download Mothersuperior/yue2-mothersuperior-realaudio-tokenizer-v4 \
+  --revision e2e63d859f3af879baf1b4d4e9f22d1eeda6fde5 --local-dir $YUE2_COVER_HOME/realaudio-tokenizer \
+  scripts/prep_real.py scripts/ar_prep.py scripts/ckpt_io.py \
+  tokenizer_head_joint_v9.safetensors nar_lora_joint_v9.safetensors
+export YUE2_COVER_PYTHON=/path/to/yue2-env/bin/python
+export YUE2_COVER_SAGE_PYTHON=/path/to/sheetsage-env/bin/python
+export YUE2_COVER_WHISPER=large-v3-turbo           # or a checkpoint path
+```
+
+The steps run offline (`HF_HUB_OFFLINE=1`), so download first. The tokenizer scripts are checked against pinned
+hashes and only their model definitions are used; they are never run.
+
+### Your singer's reference library
+
+```bash
+python tools/add_reference.py --clip clip-01.flac --lyrics-file clip-01.txt --id singer-ballad-01
+```
+
+Use 25-40 s clips of the singer's own recordings (vocals over accompaniment, like a released song), starting just
+before a phrase. Add clips at several tempos (for example 60, 64, 85 and 121 BPM): a song is covered only if some
+clip is within 1.18x of its tempo. The tool transcribes the clip, keeps one section, measures its tempo from the
+beats and its first sung note from the vocal melody, and prints the numbers; `--true-bpm` and
+`--first-note-seconds` override them. Use only voices you have the right to use.
+
+## Run
+
+```bash
+python yue2_cover/job.py --source song.mp3 --output cover.wav --work work/song1 \
+  --lyrics-file song1-lyrics.txt --arrangement "acoustic guitar ballad"
+```
+
+- `--lyrics-file`: one sung line per line. Without it, Whisper's text is sung.
+- `--arrangement`: genre and arrangement words; the default is an emotional C-pop ballad.
+- `--asr-prompt ''` for songs that are not in Chinese.
+
+A 228 s song took 230 s on one RTX 3090: score 21 s, ASR 20 s, plan 4 s, encode 10 s, generate 174 s.
+`work/receipt.json` records the reference clip, tempo, sections, ties and timings.
+
+**If a cover stops right after the voice prompt** (the job then fails with `YUE2_TOO_SHORT`): the model sometimes
+ends the song at the boundary. It is sensitive to the reference alignment: in our tests the same song and clip
+failed with the measured clip tempo 60.609 BPM and sang the whole song with 60.683 BPM. Re-measure the clip tempo
+(`--true-bpm`), try another clip, or give the lyrics. Use a new `--work` folder for each attempt.
+
+Tests (CPU only): `python tests/test_plan_and_tools.py`; `python yue2_cover/encode_impl.py --self-test` checks the
+tokenizer scripts against the pinned hashes.
+
+## Licenses
+
+- This repository's code: Apache License 2.0.
+- **Model weights are not Apache.** YuE2-3B and YuE2-Vae: CC BY-NC 4.0 with M-A-P's additional permission for
+  individual creators; companies need a separate license from M-A-P (see the
+  [YuE license section](https://github.com/multimodal-art-projection/YuE#license)).
+  SheetSage2 and MERT-v2 (M-A-P) and the real-audio tokenizer head and NAR LoRA (Mothersuperior): CC BY-NC 4.0.
+- `yue2-infer`: Apache License 2.0. openai-whisper: MIT.
+- Covering a song does not license the song. Keep covers for personal listening unless you hold the rights.
+
+## Credits
+
+- [YuE2](https://huggingface.co/m-a-p/YuE2-3B), [SheetSage2](https://huggingface.co/m-a-p/SheetSage2) and
+  [MERT](https://huggingface.co/m-a-p/MERT-v2-FullSong) by M-A-P (Multimodal Art Projection) and collaborators.
+- [Real-audio tokenizer head and NAR LoRA](https://huggingface.co/Mothersuperior/yue2-mothersuperior-realaudio-tokenizer-v4)
+  by Mothersuperior.
+- Forced-history sampling follows the approach of the audio.cpp YuE2 implementation (commit f1c299b).
+- [Whisper](https://github.com/openai/whisper) by OpenAI.
+
+---
+
+## 中文说明
+
+用 **你的歌手的声音** 重新演唱一首歌，伴奏由模型 **重新编曲**，旋律、歌词和结构保持原曲。基于 M-A-P 的
+YuE2，不需要给歌手做微调，只需要几段 30 秒左右的演唱片段。
+
+**原理**：SheetSage2 把原曲扒成谱（旋律、和弦、段落、节拍），Whisper 给出逐字时间，把歌词分配到各段。
+从歌手片段库里选速度最接近的一段，拉伸对齐后编码成 YuE2 的语义 token，作为强制前缀放在生成序列最前面；
+后面接原曲的乐谱，YuE2 就用这个声音把整首歌唱下去，伴奏按风格描述自己生成。最后切掉前缀部分。
+
+**我们踩过的坑**（都写进了 `plan.py`）：
+
+1. 整个合成乐谱只能有一个速度。参考段保留自己的速度时，模型会跟着音频速度走，最后变成念白。所以选速度最接近的片段，尽量少拉伸（最多 1.18 倍）。
+2. 歌词按乐谱的段落分成 YuE2 原生的 `[Verse]` / `[Chorus]` 块，纯器乐段留空块。全部歌词放在一块里，第一段之后就会跑偏。
+3. SheetSage 会把句尾的长音拆成两个同音高的音，YuE 会把最后一个字唱两遍。中文一字一音，只在音符比字多的句子里把句尾同音高的两个音连起来，其他不动。
+4. Whisper 不用前文条件（长歌会循环同一句），每个窗口都带简体中文提示；去掉“作词”“字幕”之类的幻觉，以及中文歌间奏里误识别出的英文。能给真实歌词就给。
+5. 参考片段按第一个唱出的音精确对齐，再补到 25 Hz 编码帧边界；避开略长于 30 秒整数倍的长度。
+6. 参数：AR CFG 1.0，NAR 64 步，seed 42。
+
+**用法**见上面的 Setup / Run。228 秒的歌在一张 RTX 3090 上用时 230 秒，显存峰值 8.5 GB。
+
+**许可**：本仓库代码 Apache 2.0。YuE2 权重是 CC BY-NC 4.0 加 M-A-P 给个人创作者的额外许可，
+公司使用需向 M-A-P 另行取得授权；SheetSage2、MERT2 和社区的音频编码器权重是 CC BY-NC 4.0。翻唱不等于获得歌曲本身的授权，请仅供个人欣赏。请只使用你有权使用的声音。

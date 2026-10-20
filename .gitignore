@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+work/
+*.wav
+*.flac
+*.mp3
+*.npy
