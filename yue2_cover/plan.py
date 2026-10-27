@@ -5,7 +5,9 @@ The recipe (each rule fixed a failure we heard; see the README):
 - the singer's reference clip is the nearest tempo in the library, stretched as little as possible and
   shifted so its first sung note lands where its score puts it;
 - a line with more notes than syllables gets its line-end same-pitch pair tied (SheetSage splits held
-  notes, and YuE re-sings each attack); every other note stays as transcribed.
+  notes, and YuE re-sings each attack); every other note stays as transcribed;
+- with no lyrics given, lines Whisper misheard take the words of the song's published lyrics when a lookup found
+  them (lyrics_step.py); the heard lines are placed in time first, so repeated choruses stay where they were sung.
 """
 from __future__ import annotations
 
@@ -123,6 +125,92 @@ def asr_units(asr):
             for j, u in enumerate(wu):
                 out.append((u.lower(), w['s'] + j * (w['e'] - w['s']) / len(wu)))
     return out
+
+
+def plain(text):
+    return ''.join(UNIT.findall(text)).lower()
+
+
+def similarity(a, b):
+    return difflib.SequenceMatcher(None, plain(a), plain(b), autojunk=False).ratio()
+
+
+CLOSE = 0.45         # a heard line this close to a published one takes its words
+NEXT = 0.4           # ... or this close when it is the published line right after the previous match
+LENGTHS = (0.7, 1.45)  # published/heard syllables: a much longer one is two lines heard as one, never forced in
+
+
+def corrected(lines, published):
+    """The heard lines with the words of the published lyrics, as groups [(heard line indexes, new lines)]: each line
+    (or two heard lines that are one published line) is matched to the closest published line or pair of consecutive
+    lines, and takes its words when close and of a like length. The heard structure stays: a verse the singer left out
+    is not put back."""
+    pool = [(k, [p]) for k, p in enumerate(published)] + [(k, [a, b]) for k, (a, b) in enumerate(zip(published, published[1:]))]
+
+    def best(text, after):
+        n = len(UNIT.findall(text))
+        scored = [(similarity(text, ' '.join(c)), k == after, k, c) for k, c in pool
+                  if n and LENGTHS[0] <= len(UNIT.findall(' '.join(c))) / n <= LENGTHS[1]]
+        return max(scored, key=lambda x: (x[0], x[1]), default=(0.0, False, None, None))
+
+    def taken(found):
+        return found[3] is not None and (found[0] >= CLOSE or found[0] >= NEXT and found[1])
+
+    groups, i, changed, after = [], 0, 0, None
+    while i < len(lines):
+        one = best(lines[i], after)
+        if i + 1 < len(lines):
+            two = best(lines[i] + ' ' + lines[i + 1], after)
+            if taken(two) and two[0] >= max(one[0], best(lines[i + 1], after)[0]) + 0.1:
+                groups.append(([i, i + 1], list(two[3])))
+                changed += 1
+                after = two[2] + len(two[3])
+                i += 2
+                continue
+        if taken(one):
+            groups.append(([i], list(one[3])))
+            changed += one[3] != [lines[i]]
+            after = one[2] + len(one[3])
+        else:
+            groups.append(([i], [lines[i]]))
+            after = None
+        i += 1
+    return groups, changed
+
+
+def retimed(groups, lyric, times, reliable):
+    """New lines, units, times and reliability: each group keeps its heard lines' own time span. A line with as many
+    syllables as it was heard with keeps every syllable's time; otherwise its syllables are spread over the span."""
+    lines, out_lyric, out_times, out_reliable = [], [], [], []
+    for heard, new in groups:
+        idx = [k for k, (_, li) in enumerate(lyric) if li in heard]
+        units = [u.lower() for line in new for u in UNIT.findall(line)]
+        same = len(units) == len(idx)
+        t0, t1 = min(times[k] for k in idx), max(times[k] for k in idx)
+        n = 0
+        for line in new:
+            for u in UNIT.findall(line):
+                out_lyric.append((u.lower(), len(lines)))
+                out_times.append(times[idx[n]] if same else t0 + (t1 - t0) * n / max(1, len(units) - 1))
+                out_reliable.append(reliable[idx[n]] if same else False)
+                n += 1
+            lines.append(line)
+    return lines, out_lyric, out_times, out_reliable
+
+
+def load_lookup(work: Path):
+    """(published lines, {'id', 'score'}) from work/lyrics-lookup.json (lyrics_step.py), or (None, None): no file, a
+    corrupt file, or no song found all leave the heard lyrics as they are."""
+    path = work / 'lyrics-lookup.json'
+    if not path.is_file():
+        return None, None
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+        song = value.get('song')
+        published = [line['text'] for line in value.get('lines') or []] if song else []
+    except (ValueError, AttributeError, KeyError, TypeError):
+        return None, None
+    return (published, {'id': song.get('id'), 'score': value.get('score')}) if published else (None, None)
 
 
 def lyric_lines(lyrics, asr):
@@ -304,11 +392,20 @@ def build(work: Path, lyrics: str, arrangement: str):
     ref, _ = choose_reference(score.score.bpm, refs)
     composite, ref_plan = reference_plan(ref, score.text)
     units = asr_units(asr)
+    published, song = load_lookup(work)
     lines, lyric_source = lyric_lines(lyrics, asr)
+    lyric, times, reliable = place_lines(lines, units, score)
+    if published and lyric_source == 'asr':
+        # Place first, correct second. The heard lines are placed in time while their text is still what Whisper
+        # heard, so they line up with its words exactly; then each takes the published words inside its own time
+        # span. Correcting the words before placing them lined repeated choruses up wrongly (31 of 44 lines of one
+        # song ended up in its last chorus).
+        groups, changed = corrected(lines, published)
+        lines, lyric, times, reliable = retimed(groups, lyric, times, reliable)
+        lyric_source = f'asr+lookup:{changed}'
     han = sum(len(HAN.findall(l)) for l in lines)
     total = sum(len(UNIT.findall(l)) for l in lines)
     language = 'zh' if han >= 0.5 * total else 'en' if (asr.get('language') == 'en') else 'other'
-    lyric, times, reliable = place_lines(lines, units, score)
     sections = score.sections()
     assigned = assign_sections(lines, lyric, times, sections)
     # Ties only for Chinese: one character is one syllable, so spare notes mean held tails.
@@ -335,7 +432,8 @@ def build(work: Path, lyrics: str, arrangement: str):
             'reference_samples': ref_plan['samples'], 'reference_frames': ref_plan['frames'],
             'reference_seconds': ref_plan['samples'] / 48000, 'max_tokens': max_tokens,
             'target_bpm': score.score.bpm, 'language': language, 'lyric_source': lyric_source,
-            'lines': len(lines), 'ties': len(ties), 'sections': target_labels}
+            'lines': len(lines), 'ties': len(ties), 'sections': target_labels,
+            **({'lyrics_song': song} if song and lyric_source.startswith('asr+lookup') else {})}
     (work / 'request.json').write_text(json.dumps(request, ensure_ascii=False, indent=1), encoding='utf-8')
     (work / 'plan.json').write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding='utf-8')
     return plan

@@ -6,7 +6,9 @@ Steps (each a separate process, so each model's VRAM is released before the next
   score     SheetSage2 transcribes the song: lead sheet (melody, chords, sections), beats and downbeats.
   asr       Whisper word timings (sung stretches it missed are heard again); they place the lyric lines
             in the score's sections.
-  plan      picks the singer's reference clip nearest in tempo and writes one composite score
+  lyrics    only when no lyrics are given (and not turned off): the song's published lyrics are looked up online
+            from what was heard; a failure only leaves them out (lyrics_step.py).
+  plan     picks the singer's reference clip nearest in tempo and writes one composite score
             (reference bars, then the song) plus section-tagged lyrics (plan.py).
   encode    the stretched, aligned reference clip -> YuE2 semantic tokens (real-audio tokenizer head).
   generate  YuE2 continues from those tokens as a forced prefix: the singer's voice carries into the song.
@@ -96,6 +98,15 @@ def run(args):
     step('asr', [py, HERE / 'asr_step.py', source, work / 'asr.json', args.asr_prompt, work / 'score'], work, 600, log)
     from plan import build
     lyrics = Path(args.lyrics_file).read_text(encoding='utf-8') if args.lyrics_file else ''
+    lookup = work / 'lyrics-lookup.json'
+    lookup.unlink(missing_ok=True)          # never reuse the result of an earlier attempt in this folder
+    if not lyrics.strip() and paths.LYRICS_LOOKUP and not args.no_lyrics_lookup:
+        # No lyrics given: the published ones are looked up from what was heard (lyrics_step.py). Any failure only
+        # leaves the lookup out; the heard lyrics are sung as they are.
+        try:
+            step('lyrics', [py, HERE / 'lyrics_step.py', work / 'asr.json', lookup], work, 90, log)
+        except (RuntimeError, subprocess.TimeoutExpired):
+            lookup.unlink(missing_ok=True)
     t = time.monotonic()
     plan = build(work, lyrics, args.arrangement or '')
     log['plan'] = round(time.monotonic() - t, 1)
@@ -136,6 +147,9 @@ def main():
     parser.add_argument('--lyrics-file', help='the lyrics, one line per sung line; without it, Whisper\'s text is sung')
     parser.add_argument('--arrangement', help='genre/arrangement words, e.g. "acoustic guitar folk"')
     parser.add_argument('--asr-prompt', default=CHINESE_PROMPT, help="Whisper prompt; '' for non-Chinese songs")
+    parser.add_argument('--no-lyrics-lookup', action='store_true',
+                        help="do not look the song's published lyrics up online when no lyrics are given "
+                             '(or set YUE2_COVER_LYRICS_LOOKUP=0)')
     run(parser.parse_args())
 
 
