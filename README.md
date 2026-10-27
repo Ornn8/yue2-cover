@@ -48,7 +48,11 @@ Each rule fixed a failure we heard:
    are counted against syllables, not decided from timing alone.
 4. **Clean Whisper text.** No previous-text conditioning (long songs loop on one line); a simplified-Chinese prompt
    on every window; credit and subtitle hallucinations ("作词", "字幕…") are dropped, and so is stray English heard
-   over the instrumental parts of a Chinese song. Passing the real lyrics (`--lyrics-file`) is always better.
+   over the instrumental parts of a Chinese song. Whole-song Whisper also skips sung lines now and then (one pop
+   song lost a whole verse, so the model got 84 notes for 29 syllables there and stretched and rushed the words):
+   sung stretches that no word starts within a second of are found from the score's vocal melody and heard again
+   on their own (`clip_timestamps`); they are listed under `refilled` in `work/asr.json`. Passing the real lyrics
+   (`--lyrics-file`) is always better.
 5. **Exact reference alignment.** The clip is shifted so its first sung note lands where its score puts it, then
    padded to a 25 Hz codec-frame boundary. Reference lengths just over a multiple of 30 s are avoided (the MERT
    feature extractor drops a sub-second tail).
@@ -197,7 +201,7 @@ The code is Apache 2.0, but the model weights are not; see [Licenses](#licenses)
 1. 整个合成乐谱只能有一个速度。参考段保留自己的速度时，模型会跟着音频速度走，最后变成念白。所以选速度最接近的片段，尽量少拉伸（最多 1.18 倍）。
 2. 歌词按乐谱的段落分成 YuE2 原生的 `[Verse]` / `[Chorus]` 块，纯器乐段留空块。全部歌词放在一块里，第一段之后就会跑偏。
 3. SheetSage 会把句尾的长音拆成两个同音高的音，YuE 会把最后一个字唱两遍。中文一字一音，只在音符比字多的句子里把句尾同音高的两个音连起来，其他不动。
-4. Whisper 不用前文条件（长歌会循环同一句），每个窗口都带简体中文提示；去掉“作词”“字幕”之类的幻觉，以及中文歌间奏里误识别出的英文。能给真实歌词就给。
+4. Whisper 不用前文条件（长歌会循环同一句），每个窗口都带简体中文提示；去掉“作词”“字幕”之类的幻觉，以及中文歌间奏里误识别出的英文。整首识别时 Whisper 偶尔还会漏掉唱出来的句子（有首歌漏了整段主歌，模型在那里拿到 84 个音符却只有 29 个字，字被拉长、抢拍），所以会用乐谱里的人声旋律找出一秒内没有任何字开始的唱段，单独再听一遍（`clip_timestamps`），重听的区间记在 `asr.json` 的 `refilled` 里。能给真实歌词就给。
 5. 参考片段按第一个唱出的音精确对齐，再补到 25 Hz 编码帧边界；避开略长于 30 秒整数倍的长度。
 6. 参数：AR CFG 1.0，NAR 64 步，seed 42。
 

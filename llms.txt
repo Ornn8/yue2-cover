@@ -24,6 +24,7 @@
 - Lyrics in YuE2's native [Verse]/[Chorus] blocks per score section; one block drifts.
 - Tie held line-final same-pitch notes only where a line has more notes than syllables.
 - Whisper without previous-text conditioning; drop credit/subtitle hallucinations and stray English over instrumentals.
+- Whole-song Whisper skips sung lines now and then; sung stretches no word starts near are found from the score's vocal melody and heard again on their own (`clip_timestamps`).
 - Align the reference clip's first sung note to its score; pad to a 25 Hz codec frame boundary.
 - Settings: AR CFG 1.0, NAR 64 ODE steps, seed 42. About real time on an RTX 3090, 8.5 GB peak.
 

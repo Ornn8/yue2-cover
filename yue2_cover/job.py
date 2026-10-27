@@ -4,7 +4,8 @@
 
 Steps (each a separate process, so each model's VRAM is released before the next one loads):
   score     SheetSage2 transcribes the song: lead sheet (melody, chords, sections), beats and downbeats.
-  asr       Whisper word timings; they place the lyric lines in the score's sections.
+  asr       Whisper word timings (sung stretches it missed are heard again); they place the lyric lines
+            in the score's sections.
   plan      picks the singer's reference clip nearest in tempo and writes one composite score
             (reference bars, then the song) plus section-tagged lyrics (plan.py).
   encode    the stretched, aligned reference clip -> YuE2 semantic tokens (real-audio tokenizer head).
@@ -91,7 +92,8 @@ def run(args):
     source = work / 'source.wav'
     ffmpeg('-i', args.source, '-ac', 2, '-ar', 48000, '-c:a', 'pcm_s16le', source)
     step('score', [sage, HERE / 'score_step.py', source, work / 'score'], work, 600, log)
-    step('asr', [py, HERE / 'asr_step.py', source, work / 'asr.json', args.asr_prompt], work, 600, log)
+    # The score's vocal melody lets the ASR step hear again the sung stretches its whole-song pass skipped.
+    step('asr', [py, HERE / 'asr_step.py', source, work / 'asr.json', args.asr_prompt, work / 'score'], work, 600, log)
     from plan import build
     lyrics = Path(args.lyrics_file).read_text(encoding='utf-8') if args.lyrics_file else ''
     t = time.monotonic()
