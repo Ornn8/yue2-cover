@@ -94,8 +94,9 @@ export YUE2_COVER_SAGE_PYTHON=/path/to/sheetsage-env/bin/python
 export YUE2_COVER_WHISPER=large-v3-turbo           # or a checkpoint path
 ```
 
-The steps run offline (`HF_HUB_OFFLINE=1`), so download first. The tokenizer scripts are checked against pinned
-hashes and only their model definitions are used; they are never run.
+The model steps run offline (`HF_HUB_OFFLINE=1`), so download first; the only step that uses the network is the optional
+[lyrics lookup](#run). The tokenizer scripts are checked against pinned hashes and only their model definitions are
+used; they are never run.
 
 ### Your singer's reference library
 
@@ -116,9 +117,21 @@ python yue2_cover/job.py --source song.mp3 --output cover.wav --work work/song1 
   --lyrics-file song1-lyrics.txt --arrangement "acoustic guitar ballad"
 ```
 
-- `--lyrics-file`: one sung line per line. Without it, Whisper's text is sung.
+- `--lyrics-file`: one sung line per line. Without it, Whisper's text is sung, corrected from the song's published
+  lyrics when the lookup below finds them.
 - `--arrangement`: genre and arrangement words; the default is an emotional C-pop ballad.
 - `--asr-prompt ''` for songs that are not in Chinese.
+- `--no-lyrics-lookup`: do not look the published lyrics up (same as `export YUE2_COVER_LYRICS_LOOKUP=0`).
+
+**Published-lyrics lookup (optional, uses the network).** Whisper's text can carry wrong or missing characters, and a
+missing syllable leaves a note empty. With no `--lyrics-file`, the job searches the three longest heard lines as lyrics
+on NetEase Cloud Music's public web endpoints (at most 3 searches and 8 lyric downloads) and keeps a candidate only if
+at least half of the heard lines have a close published line. The heard lines are placed in time first; each one (or
+each pair that is one published line) then takes the published words inside its own time span. It runs only when no
+lyrics are given, and any failure (no match, offline, a timeout, a changed endpoint) keeps the heard lyrics. The song
+found is recorded as `lyrics_song` in `receipt.json`; its lines are saved as `work/lyrics-lookup.json`. These endpoints
+are not an official API. You are responsible for complying with that service's terms of use and with the copyright of
+the lyrics. Turn it off with `--no-lyrics-lookup` or `YUE2_COVER_LYRICS_LOOKUP=0`.
 
 A 228 s song took 230 s on one RTX 3090: score 21 s, ASR 20 s, plan 4 s, encode 10 s, generate 174 s.
 `work/receipt.json` records the reference clip, tempo, sections, ties and timings.
@@ -204,6 +217,12 @@ The code is Apache 2.0, but the model weights are not; see [Licenses](#licenses)
 4. Whisper 不用前文条件（长歌会循环同一句），每个窗口都带简体中文提示；去掉“作词”“字幕”之类的幻觉，以及中文歌间奏里误识别出的英文。整首识别时 Whisper 偶尔还会漏掉唱出来的句子（有首歌漏了整段主歌，模型在那里拿到 84 个音符却只有 29 个字，字被拉长、抢拍），所以会用乐谱里的人声旋律找出一秒内没有任何字开始的唱段，单独再听一遍（`clip_timestamps`），重听的区间记在 `asr.json` 的 `refilled` 里。能给真实歌词就给。
 5. 参考片段按第一个唱出的音精确对齐，再补到 25 Hz 编码帧边界；避开略长于 30 秒整数倍的长度。
 6. 参数：AR CFG 1.0，NAR 64 步，seed 42。
+
+**歌词查询（可选，会联网）**：没有给 `--lyrics-file` 时，Whisper 听出的歌词可能有错字、漏字，漏一个字就会空出一个音符。
+此时会把听到的最长三句当作歌词，在网易云音乐的公开网页接口上搜索（每首歌最多搜 3 次、取 8 份歌词），只有至少一半的听写句在候选歌词里
+有相近的一句时才采用。先把听到的句子按时间放好，再让每一句（或合起来是同一句的两句）在自己的时间段内换成已发布的歌词。只在没给歌词时才查，
+任何失败（没搜到、断网、超时、接口变了）都保留听到的歌词；查到的歌曲记在 `receipt.json` 的 `lyrics_song`，歌词行存在 `work/lyrics-lookup.json`。
+这些接口不是官方 API，使用者需自行遵守该服务的使用条款和歌词版权。关闭：`--no-lyrics-lookup` 或 `YUE2_COVER_LYRICS_LOOKUP=0`。
 
 **用法**见上面的 Setup / Run。228 秒的歌在一张 RTX 3090 上用时 230 秒，显存峰值 8.5 GB。
 

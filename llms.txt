@@ -11,6 +11,8 @@
 - Run a cover: `python yue2_cover/job.py --source song.mp3 --output cover.wav --work work/song1 [--lyrics-file lyrics.txt] [--arrangement "acoustic ballad"]`
 - Add a singer clip: `python tools/add_reference.py --clip clip.flac --lyrics-file clip.txt --id singer-01`
 
+Optional lyrics lookup (uses the network): with no lyrics given, the longest heard lines are searched on NetEase Cloud Music's public web endpoints, and a candidate is kept only if at least half the heard lines have a close published line; the heard lines, placed in time first, then take its words. It runs only when no lyrics are given, and any failure keeps the heard lyrics. You are responsible for complying with that service's terms and with lyric copyrights. Turn it off with `--no-lyrics-lookup` or `YUE2_COVER_LYRICS_LOOKUP=0`.
+
 ## How it works
 
 - [job.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/job.py): score -> asr -> plan -> encode -> generate, one process per step
