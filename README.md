@@ -124,8 +124,8 @@ ends the song at the boundary. It is sensitive to the reference alignment: in ou
 failed with the measured clip tempo 60.609 BPM and sang the whole song with 60.683 BPM. Re-measure the clip tempo
 (`--true-bpm`), try another clip, or give the lyrics. Use a new `--work` folder for each attempt.
 
-Tests (CPU only): `python tests/test_plan_and_tools.py`; `python yue2_cover/encode_impl.py --self-test` checks the
-tokenizer scripts against the pinned hashes.
+Tests (CPU only, no models needed; `pip install pytest`): `python -m pytest -q`;
+`python yue2_cover/encode_impl.py --self-test` checks the tokenizer scripts against the pinned hashes.
 
 ## FAQ
 

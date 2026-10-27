@@ -1,6 +1,6 @@
 """CPU-only checks: lyric cleanup, the reference-library score format and the beat tempo fit.
 
-    python tests/test_plan_and_tools.py
+    python -m pytest -q
 """
 import sys
 from pathlib import Path
@@ -15,14 +15,6 @@ from abc_tools import parse_abc  # noqa: E402
 def asr(*texts):
     return {'segments': [{'text': t} for t in texts]}
 
-
-# Whisper's credits, subtitle lines and stray English over a Chinese song's interlude are not sung.
-lines, source = lyric_lines('', asr('作词 作曲 作曲 作曲', '该怎么走 我却只剩回头。', 'Zither Harp', '牵手和分手来自同一双手',
-                                   '字幕志愿者 某某'))
-assert source == 'asr' and lines == ['该怎么走 我却只剩回头', '牵手和分手来自同一双手'], lines
-# English songs keep their lines; the given lyrics are never filtered.
-assert lyric_lines('', asr('I will always love you', 'oh 宝贝', 'and I'))[0] == ['I will always love you', 'oh 宝贝', 'and I']
-assert lyric_lines('第一句\nZither Harp', asr('x'))[0] == ['第一句', 'Zither Harp']
 
 # A clip's score keeps one section and drops trailing bars that are only rests.
 SCORE = '''X:1
@@ -48,12 +40,29 @@ V: Vocal
 V: Ins
 Z|
 '''
-text = one_section(SCORE)
-assert text.count('% ') == 1 and '% verse' in text and '"G7"z2z12z2' not in text
-score = parse_abc(text)
-assert score.voices['Vocal'].time == 32 and score.bpm == 60
 
-# Tempo from beats: a steady 0.5 s beat with jitter is 120 BPM.
-beats = [0.3 + 0.5 * i + (0.02 if i % 2 else -0.02) for i in range(40)]
-assert abs(beat_tempo(beats) - 120) < 0.5
-print('plan and tool tests passed')
+
+def test_whisper_noise_and_stray_english_are_not_sung():
+    # Whisper's credits, subtitle lines and stray English over a Chinese song's interlude are not sung.
+    lines, source = lyric_lines('', asr('作词 作曲 作曲 作曲', '该怎么走 我却只剩回头。', 'Zither Harp', '牵手和分手来自同一双手',
+                                       '字幕志愿者 某某'))
+    assert source == 'asr' and lines == ['该怎么走 我却只剩回头', '牵手和分手来自同一双手'], lines
+
+
+def test_english_songs_and_given_lyrics_are_not_filtered():
+    # English songs keep their lines; the given lyrics are never filtered.
+    assert lyric_lines('', asr('I will always love you', 'oh 宝贝', 'and I'))[0] == ['I will always love you', 'oh 宝贝', 'and I']
+    assert lyric_lines('第一句\nZither Harp', asr('x'))[0] == ['第一句', 'Zither Harp']
+
+
+def test_clip_score_keeps_one_section_and_drops_trailing_rests():
+    text = one_section(SCORE)
+    assert text.count('% ') == 1 and '% verse' in text and '"G7"z2z12z2' not in text
+    score = parse_abc(text)
+    assert score.voices['Vocal'].time == 32 and score.bpm == 60
+
+
+def test_tempo_from_beats():
+    # A steady 0.5 s beat with jitter is 120 BPM.
+    beats = [0.3 + 0.5 * i + (0.02 if i % 2 else -0.02) for i in range(40)]
+    assert abs(beat_tempo(beats) - 120) < 0.5
