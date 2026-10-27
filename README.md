@@ -127,11 +127,14 @@ python yue2_cover/job.py --source song.mp3 --output cover.wav --work work/song1 
 missing syllable leaves a note empty. With no `--lyrics-file`, the job searches the three longest heard lines as lyrics
 on NetEase Cloud Music's public web endpoints (at most 3 searches and 8 lyric downloads) and keeps a candidate only if
 at least half of the heard lines have a close published line. The heard lines are placed in time first; each one (or
-each pair that is one published line) then takes the published words inside its own time span. It runs only when no
-lyrics are given, and any failure (no match, offline, a timeout, a changed endpoint) keeps the heard lyrics. The song
-found is recorded as `lyrics_song` in `receipt.json`; its lines are saved as `work/lyrics-lookup.json`. These endpoints
-are not an official API. You are responsible for complying with that service's terms of use and with the copyright of
-the lyrics. Turn it off with `--no-lyrics-lookup` or `YUE2_COVER_LYRICS_LOOKUP=0`.
+each pair that is one published line) then takes the published words inside its own time span. If the published lyrics
+are timed to this very recording (at least four matched lines, 60% of them starting within a second of the same
+offset), a published line no heard line matched is also sung at its own time, on the melody's notes there, in place of
+whatever was heard over it; the count is `timed_lines` in `receipt.json`. Another recording of the song (live, a
+cover) is not timed like the lyrics and is left as heard. It runs only when no lyrics are given, and any failure (no
+match, offline, a timeout, a changed endpoint) keeps the heard lyrics. The song found is recorded as `lyrics_song` in
+`receipt.json`; its lines are saved as `work/lyrics-lookup.json`. These endpoints are not an official API. You are
+responsible for complying with that service's terms of use and with the copyright of the lyrics. Turn it off with `--no-lyrics-lookup` or `YUE2_COVER_LYRICS_LOOKUP=0`.
 
 A 228 s song took 230 s on one RTX 3090: score 21 s, ASR 20 s, plan 4 s, encode 10 s, generate 174 s.
 `work/receipt.json` records the reference clip, tempo, sections, ties and timings.
@@ -220,7 +223,10 @@ The code is Apache 2.0, but the model weights are not; see [Licenses](#licenses)
 
 **歌词查询（可选，会联网）**：没有给 `--lyrics-file` 时，Whisper 听出的歌词可能有错字、漏字，漏一个字就会空出一个音符。
 此时会把听到的最长三句当作歌词，在网易云音乐的公开网页接口上搜索（每首歌最多搜 3 次、取 8 份歌词），只有至少一半的听写句在候选歌词里
-有相近的一句时才采用。先把听到的句子按时间放好，再让每一句（或合起来是同一句的两句）在自己的时间段内换成已发布的歌词。只在没给歌词时才查，
+有相近的一句时才采用。先把听到的句子按时间放好，再让每一句（或合起来是同一句的两句）在自己的时间段内换成已发布的歌词。
+若歌词的时间与这版录音对得上（至少 4 句匹配，其中 60% 的起点与歌词时间相差同一个偏移量不超过 1 秒），
+没被听到的整句会按歌词给的时间、落在旋律该处的音符上补唱，并替换那段时间里听到的句子，句数记在 `receipt.json` 的 `timed_lines`；
+对不上的版本（现场版、翻唱）保持听到的样子。只在没给歌词时才查，
 任何失败（没搜到、断网、超时、接口变了）都保留听到的歌词；查到的歌曲记在 `receipt.json` 的 `lyrics_song`，歌词行存在 `work/lyrics-lookup.json`。
 这些接口不是官方 API，使用者需自行遵守该服务的使用条款和歌词版权。关闭：`--no-lyrics-lookup` 或 `YUE2_COVER_LYRICS_LOOKUP=0`。
 

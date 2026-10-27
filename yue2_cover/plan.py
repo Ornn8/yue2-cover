@@ -8,6 +8,7 @@ The recipe (each rule fixed a failure we heard; see the README):
   notes, and YuE re-sings each attack); every other note stays as transcribed;
 - with no lyrics given, lines Whisper misheard take the words of the song's published lyrics when a lookup found
   them (lyrics_step.py); the heard lines are placed in time first, so repeated choruses stay where they were sung.
+  A published line Whisper never heard is sung at its published time when those times fit this recording.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ import difflib
 import json
 import math
 import re
+import statistics
 from fractions import Fraction
 from pathlib import Path
 
@@ -198,6 +200,77 @@ def retimed(groups, lyric, times, reliable):
     return lines, out_lyric, out_times, out_reliable
 
 
+SYNC_LINES = 4          # matched lines needed before the published times are trusted for this recording
+SYNC_SECONDS = 1.0      # ... and most of them must start this close to where the published lyrics put them
+SYNC_SHARE = 0.6        # ... "most" being this share
+FILL_MARGIN = 0.15      # a filled line starts this long after the line before it and ends this long before the next
+SECONDS_PER_SYLLABLE = 1.0  # longest a filled line is spread over, per syllable (+ FILL_MARGIN)
+
+
+def timed_fill(lines, lyric, times, reliable, timed, onsets, bounds):
+    """Lines Whisper never heard, or heard as nothing like the song, sung at the published lyrics' own times when
+    those are timed to this very recording: most lines that matched start where the published lyrics say, give or
+    take a second (a chorus's first line Whisper never heard would otherwise go unsung, its notes empty). Each
+    published line no heard line matched comes in at its own time if it falls between the matched lines around it and
+    the melody has notes there, on those notes, in place of whatever was heard over that time; other heard lines stay.
+    Another recording of the song (live, a cover) is not timed like the published lyrics, and nothing changes.
+    `timed` is [(seconds, text)], `onsets` the seconds the melody's notes start and `bounds` the first and last second
+    it covers. Returns lines, lyric, times, reliable and how many lines were filled."""
+    spans = []
+    for li in range(len(lines)):
+        at = [times[k] for k, (_, l) in enumerate(lyric) if l == li]
+        spans.append((min(at), max(at)))
+    matched, offsets = {}, []
+    for li, line in enumerate(lines):
+        same = [k for k, (_, text) in enumerate(timed) if plain(text) == plain(line)]
+        if same:  # a repeated line is the repeat nearest in time
+            k = min(same, key=lambda k: abs(spans[li][0] - timed[k][0]))
+            matched[li] = k
+            offsets.append(spans[li][0] - timed[k][0])
+    unchanged = (lines, lyric, times, reliable, 0)
+    if len(offsets) < SYNC_LINES:
+        return unchanged
+    offset = statistics.median(offsets)
+    if sum(abs(x - offset) <= SYNC_SECONDS for x in offsets) < SYNC_SHARE * len(offsets):
+        return unchanged
+    due = [(t + offset, text) for t, text in timed]
+    used = set(matched.values())
+    windows, start = [], bounds[0]       # the stretches between one matched line and the next
+    for li in sorted(matched):
+        windows.append((start, spans[li][0]))
+        start = max(start, spans[li][1])
+    windows.append((start, bounds[1]))
+    filled = []
+    for lo, hi in windows:
+        for k, (t, text) in enumerate(due):
+            if k in used or not lo + FILL_MARGIN <= t <= hi - 0.5:
+                continue
+            n = len(UNIT.findall(text))
+            following = next((u for u, _ in due[k + 1:] if u > t), hi)
+            end = min(hi, following, t + SECONDS_PER_SYLLABLE * n + FILL_MARGIN) - FILL_MARGIN
+            notes = [on for on in onsets if max(lo, t - 0.3) < on <= end]
+            if n and len(notes) >= max(1, n // 2):
+                # On the melody's own notes when it has one for each syllable, else spread over the line's time.
+                at = notes[:n] if len(notes) >= n else [t + (end - t) * j / max(1, n - 1) for j in range(n)]
+                filled.append((min(t, at[0]), end, text, at))
+    if not filled:
+        return unchanged
+    entries = [(t, text, [(u.lower(), x, False) for u, x in zip(UNIT.findall(text), at)]) for t, _, text, at in filled]
+    for li, line in enumerate(lines):
+        a, b = spans[li]
+        if li in matched or not any(a <= end and b >= t for t, end, _, _ in filled):
+            entries.append((a, line, [(u, times[k], reliable[k]) for k, (u, l) in enumerate(lyric) if l == li]))
+    entries.sort(key=lambda e: e[0])
+    out_lines, out_lyric, out_times, out_reliable = [], [], [], []
+    for _, line, units in entries:
+        for u, t, ok in units:
+            out_lyric.append((u, len(out_lines)))
+            out_times.append(t)
+            out_reliable.append(ok)
+        out_lines.append(line)
+    return out_lines, out_lyric, out_times, out_reliable, len(filled)
+
+
 def load_lookup(work: Path):
     """(published lines, {'id', 'score'}) from work/lyrics-lookup.json (lyrics_step.py), or (None, None): no file, a
     corrupt file, or no song found all leave the heard lyrics as they are."""
@@ -211,6 +284,16 @@ def load_lookup(work: Path):
     except (ValueError, AttributeError, KeyError, TypeError):
         return None, None
     return (published, {'id': song.get('id'), 'score': value.get('score')}) if published else (None, None)
+
+
+def load_timed(work: Path):
+    """[(seconds, text)] of the published lines that carry a time, from the file load_lookup reads; [] wherever
+    load_lookup finds nothing usable."""
+    if not load_lookup(work)[0]:
+        return []
+    value = json.loads((work / 'lyrics-lookup.json').read_text(encoding='utf-8'))
+    return [(float(line['t']), line['text']) for line in value['lines']
+            if isinstance(line.get('t'), (int, float)) and math.isfinite(line['t'])]
 
 
 def lyric_lines(lyrics, asr):
@@ -393,15 +476,22 @@ def build(work: Path, lyrics: str, arrangement: str):
     composite, ref_plan = reference_plan(ref, score.text)
     units = asr_units(asr)
     published, song = load_lookup(work)
+    filled = 0
     lines, lyric_source = lyric_lines(lyrics, asr)
     lyric, times, reliable = place_lines(lines, units, score)
     if published and lyric_source == 'asr':
         # Place first, correct second. The heard lines are placed in time while their text is still what Whisper
         # heard, so they line up with its words exactly; then each takes the published words inside its own time
         # span. Correcting the words before placing them lined repeated choruses up wrongly (31 of 44 lines of one
-        # song ended up in its last chorus).
+        # song ended up in its last chorus). Last, published lines nobody heard come in at their published times, if
+        # those fit this recording.
         groups, changed = corrected(lines, published)
         lines, lyric, times, reliable = retimed(groups, lyric, times, reliable)
+        notes = score.vocal.notes
+        onsets = [float(score.seconds(n[0])) for n in notes]
+        bounds = (onsets[0] - 0.3, float(score.seconds(notes[-1][0] + notes[-1][2])))
+        lines, lyric, times, reliable, filled = timed_fill(lines, lyric, times, reliable, load_timed(work),
+                                                           onsets, bounds)
         lyric_source = f'asr+lookup:{changed}'
     han = sum(len(HAN.findall(l)) for l in lines)
     total = sum(len(UNIT.findall(l)) for l in lines)
@@ -432,7 +522,7 @@ def build(work: Path, lyrics: str, arrangement: str):
             'reference_samples': ref_plan['samples'], 'reference_frames': ref_plan['frames'],
             'reference_seconds': ref_plan['samples'] / 48000, 'max_tokens': max_tokens,
             'target_bpm': score.score.bpm, 'language': language, 'lyric_source': lyric_source,
-            'lines': len(lines), 'ties': len(ties), 'sections': target_labels,
+            'lines': len(lines), 'timed_lines': filled, 'ties': len(ties), 'sections': target_labels,
             **({'lyrics_song': song} if song and lyric_source.startswith('asr+lookup') else {})}
     (work / 'request.json').write_text(json.dumps(request, ensure_ascii=False, indent=1), encoding='utf-8')
     (work / 'plan.json').write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding='utf-8')
