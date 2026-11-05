@@ -17,15 +17,26 @@ songs work too.
 ## How it works
 
 ```
-song.mp3 ─► SheetSage2 ─► lead sheet (melody, chords, sections, beats)
-        └─► Whisper ─────► word timings ─► lyric lines placed in the score's sections
-                                   │
-singer's clip library ─► nearest tempo ─► composite ABC score: [reference bars][song bars]
+song.mp3 ─┬► features.py (CPU) ──► drum share of the mix ─────────────────────────────┐
+          ├► SheetSage2 ─► lead sheet (melody, chords, sections, beats)               │
+          ├► Whisper ────► word timings (+ sung stretches it missed, heard again)     │
+          │       └► [no lyrics given] published-lyrics lookup (optional, network)    │
+          └► [no --arrangement, listener set] style tags written from a 40 s excerpt  │
+                                   │                                                  │
+ lyrics: LRC / lookup timed lyrics that fit the recording are the plan,               │
+         else the heard lines (corrected by the published words)                      │
+                                   │                                                  ▼
+singer's clip library ─► tempo within 3%, then closest drum share (random tie) ─► reference clip
+                                   │        composite ABC score: [reference bars][song bars]
                                    │        section-tagged lyrics, held line ends tied
 reference clip ─► stretch + align ─► real-audio tokenizer ─► YuE2 semantic tokens (forced prefix)
                                    │
-                       YuE2 AR (CFG 1) continues the prefix over the song's score
-                       YuE2 NAR (joint-v9 LoRA, 64 ODE steps) ─► audio, prefix cut off ─► cover.wav
+        attempt 1..3, fresh seed each (attempt 3 may use the next-closest clip if the first was stretched >3%)
+                       YuE2 AR (CFG 1) continues the prefix over the song's score; an early stop is caught
+                       before decoding and the next seed is sung with the model still loaded
+                       YuE2 NAR (joint-v9 LoRA, 64 ODE steps) ─► audio, prefix cut off, dead air trimmed ─► cover.wav
+                                   │
+                       [optional] lyric_check.py: Whisper on the vocal stem, score recorded in receipt.json
 ```
 
 YuE2 normally writes its own score and voice. Here the score is the song's own transcription, and the first bars are
@@ -38,8 +49,11 @@ style text.
 Each rule fixed a failure we heard:
 
 1. **One tempo for the whole composite score.** When the reference section kept its own tempo, the model followed
-   the audio's tempo and slid into speech. Pick the library clip nearest the song's tempo and stretch it as little
-   as possible (at most 1.18x; otherwise no reference fits).
+   the audio's tempo and slid into speech. Stretch the reference as little as possible (at most 1.18x). When several
+   clips are within 3% of the song's tempo, take the one whose drum share (percussive share of the spectrogram, from
+   `features.py`) is closest to the song's, at random among those within 0.015 of the best: the backing drums of a cover
+   follow its reference clip (r = 0.66-0.75 in our measurements). A song whose detected tempo fits no clip is read at
+   half or double time first (beat trackers are often off by 2x), see `tempo_view` in `plan.py`.
 2. **Lyrics in YuE2's native section blocks.** One `[Verse]` / `[Chorus]` block per `% label` section of the score,
    in order, with empty blocks for instrumental sections. All lyrics in one block drift after the first section.
 3. **Tie held line ends only where needed.** SheetSage splits a held line-final note into two same-pitch attacks and
@@ -47,8 +61,13 @@ Each rule fixed a failure we heard:
    gets its line-end same-pitch pair tied; nothing else is changed. Whisper word times run ~0.4 s early, so notes
    are counted against syllables, not decided from timing alone.
 4. **Clean Whisper text.** No previous-text conditioning (long songs loop on one line); a simplified-Chinese prompt
-   on every window; credit and subtitle hallucinations ("作词", "字幕…") are dropped, and so is stray English heard
-   over the instrumental parts of a Chinese song. Whole-song Whisper also skips sung lines now and then (one pop
+   on every window, for Chinese songs only (on other languages it makes Whisper hear subtitle credits); the language is
+   heard in the most-sung 30 s, or taken from timed lyrics when you give them. Credit and subtitle hallucinations
+   ("作词", "字幕…") are dropped, and so is stray English heard over the instrumental parts of a Chinese song. Made-up
+   segments are dropped too: more than 12 characters per second, one short unit repeated over nearly all of the
+   segment, or an echo of the prompt (after a long intro Whisper may write pieces of the prompt in place of the verse).
+   A refill span that ends past the end of the audio is cut at the end (otherwise `clip_timestamps` loops until the
+   step times out). Whole-song Whisper also skips sung lines now and then (one pop
    song lost a whole verse, so the model got 84 notes for 29 syllables there and stretched and rushed the words):
    sung stretches that no word starts within a second of are found from the score's vocal melody and heard again
    on their own (`clip_timestamps`); they are listed under `refilled` in `work/asr.json`. Passing the real lyrics
@@ -56,10 +75,32 @@ Each rule fixed a failure we heard:
 5. **Exact reference alignment.** The clip is shifted so its first sung note lands where its score puts it, then
    padded to a 25 Hz codec-frame boundary. Reference lengths just over a multiple of 30 s are avoided (the MERT
    feature extractor drops a sub-second tail).
-6. **Settings:** AR CFG 1.0, NAR 64 ODE steps, seed 42.
+6. **Settings:** AR CFG 1.0, NAR 64 ODE steps. The seed is fresh for every attempt (rule 7).
+7. **Retry with fresh seeds.** About one render in four ended 1-17 s after the voice prompt. The same inputs and seed
+   give the same song, so `job.py` makes up to 3 attempts, each with a new seed; `run_cover.py` catches an attempt
+   shorter than half the song (or 10 s) before the NAR/VAE decode and sings the next seed with the model still loaded.
+   If the first reference had to be stretched by more than 3%, the last seed is held back for the next-closest clip.
+   Every attempt (seed, reference, length, `early_stop`/`too_short`) is in `receipt.json`, so any take can be sung
+   again exactly. When all three fail the job exits with `YUE2_EARLY_STOP`.
+8. **Trim the seam.** After the forced phrase the model often sings on a little of it and leaves some dead air before
+   the song comes in; the cover starts after the last stretch of dead air (50 ms frames below -60 dB for 0.4 s or more)
+   in its first 15 s (`trim_seam`).
+9. **Timed lyrics are the plan when they fit.** An LRC file given as `--lyrics-file`, or the lookup's timed lyrics, are
+   sung as they are when most of their lines are heard where their times say after one shift (or a few, for an edit or a
+   pause this version adds): each line is searched for around the song's voted shift, a line's own shift is the median
+   of its nearest on-time neighbours, and at least 75% of the heard lines must have a published line at that time
+   (`lrc_fit`, `heard_cover`). Otherwise the heard lines are sung, corrected by the published words. Lines that were sung
+   but are missing from the published lyrics (an ad-lib, a repeat) are added from the heard text (`heard_extra`).
+   Japanese, Korean and English are handled too (sung units, language-named style line); the held-tail ties are
+   Chinese-only, see the help-wanted list.
+10. **Style words.** Your `--arrangement` words go into the style line as written (YuE2 understands English tags best).
+    With none given, an optional listener (any audio-understanding model) writes tags from a 40 s excerpt; voice words
+    are removed because the singer is fixed. A failing listener leaves the default words.
+11. **Lyric check (optional, recording only).** `YUE2_COVER_LYRIC_CHECK=1` scores how many planned lines can be heard in
+    the finished cover. It never sings the song again; a production setup tried that and switched it off.
 
 Typical results: every line in order and on time; the model sometimes adds an echo in a long instrumental outro or
-ends it early. Lyric errors in Whisper's text are sung as they are.
+ends it early (see rule 7 and the help-wanted list). Lyric errors in Whisper's text are sung as they are.
 
 ## Other models
 
@@ -108,7 +149,9 @@ Use 25-40 s clips of the singer's own recordings (vocals over accompaniment, lik
 before a phrase. Add clips at several tempos (for example 60, 64, 85 and 121 BPM): a song is covered only if some
 clip is within 1.18x of its tempo. The tool transcribes the clip, keeps one section, measures its tempo from the
 beats and its first sung note from the vocal melody, and prints the numbers; `--true-bpm` and
-`--first-note-seconds` override them. Use only voices you have the right to use.
+`--first-note-seconds` override them. It also stores the clip's mix measures (`features.py`, needs librosa) in
+`<references>/features.json`, which the drum-share pick uses; without them the pick is by tempo only. Use only voices you
+have the right to use.
 
 ## Run
 
@@ -117,10 +160,12 @@ python yue2_cover/job.py --source song.mp3 --output cover.wav --work work/song1 
   --lyrics-file song1-lyrics.txt --arrangement "acoustic guitar ballad"
 ```
 
-- `--lyrics-file`: one sung line per line. Without it, Whisper's text is sung, corrected from the song's published
-  lyrics when the lookup below finds them.
-- `--arrangement`: genre and arrangement words; the default is an emotional C-pop ballad.
-- `--asr-prompt ''` for songs that are not in Chinese.
+- `--lyrics-file`: one sung line per line, or an LRC file (`[mm:ss.xx]line`, at least 4 lines) whose times are used when
+  they fit the recording. Without it, Whisper's text is sung, corrected from the song's published lyrics when the lookup
+  below finds them.
+- `--arrangement`: genre and arrangement words in English; the default is an emotional C-pop ballad, or tags written
+  from the song when a listener is configured (below).
+- `--asr-prompt`: the Whisper prompt; it is used for Chinese songs only, so other languages need no change.
 - `--no-lyrics-lookup`: do not look the published lyrics up (same as `export YUE2_COVER_LYRICS_LOOKUP=0`).
 
 **Published-lyrics lookup (optional, uses the network).** Whisper's text can carry wrong or missing characters, and a
@@ -139,10 +184,22 @@ responsible for complying with that service's terms of use and with the copyrigh
 A 228 s song took 230 s on one RTX 3090: score 21 s, ASR 20 s, plan 4 s, encode 10 s, generate 174 s.
 `work/receipt.json` records the reference clip, tempo, sections, ties and timings.
 
-**If a cover stops right after the voice prompt** (the job then fails with `YUE2_TOO_SHORT`): the model sometimes
-ends the song at the boundary. It is sensitive to the reference alignment: in our tests the same song and clip
-failed with the measured clip tempo 60.609 BPM and sang the whole song with 60.683 BPM. Re-measure the clip tempo
-(`--true-bpm`), try another clip, or give the lyrics. Use a new `--work` folder for each attempt.
+**Automatic style words (optional).** With no `--arrangement`, set `YUE2_COVER_LISTENER=module:function` to a Python
+callable `listen(audio_bytes, mime, prompt) -> str` (any model that can listen to audio). `yue2_cover/listener_openai.py`
+is a complete example for an OpenAI-compatible chat endpoint that takes audio input (endpoint, key and model name come
+from `YUE2_COVER_LISTENER_URL`, `_KEY` and `_MODEL`; nothing is built in). A ~40 s excerpt around the first chorus is sent,
+the answer is cleaned to tags without voice words, and the result is recorded in `work/style.json` and `receipt.json`
+(`style_source`: `user`, `auto` or `default`). Check your provider's terms; the audio leaves your machine.
+
+**Lyric check (optional).** `YUE2_COVER_LYRIC_CHECK=1` (Chinese songs; needs `pip install demucs` for the vocal stem)
+adds `lyric_check` to `receipt.json`: `lyric_share` (planned lines heard, in order), `source_share` (the same for the
+original, since a line nobody hears in the original is not the cover's fault) and `lyric_passed`. It changes nothing.
+
+**If a cover stops right after the voice prompt**: the job retries by itself (rule 7). If all three attempts fail it exits
+with `YUE2_EARLY_STOP` and `receipt.json` lists them. Early stops are more frequent with a reference stretched far from its
+own tempo and sensitive to the reference alignment (the same song and clip failed with a measured clip tempo of 60.609 BPM
+and sang the whole song with 60.683 BPM), so add clips at more tempi, re-measure the clip tempo (`--true-bpm`), or give the
+lyrics. `YUE2_COVER_FAULT_EARLY_STOPS=N` makes the first N attempts stop early on purpose to test the retry path.
 
 Tests (CPU only, no models needed; `pip install pytest`): `python -m pytest -q`;
 `python yue2_cover/encode_impl.py --self-test` checks the tokenizer scripts against the pinned hashes.
@@ -175,6 +232,23 @@ The rules are tuned for Mandarin Chinese; English songs work with `--asr-prompt 
 **Can I use it commercially?**
 The code is Apache 2.0, but the model weights are not; see [Licenses](#licenses).
 
+## Known weaknesses and help wanted
+
+What does not work well yet. Each item has an issue with repro notes; pull requests are welcome, and so are measurements
+(please say how many songs and which settings).
+
+- **Early stops**, worse with stretched references: the retry hides it, it does not fix it. [#1](https://github.com/Ornn8/yue2-cover/issues/1)
+- **Rap and layered vocals**: SheetSage2 writes one vocal line, so rap and stacked backing vocals come out poorly. [#2](https://github.com/Ornn8/yue2-cover/issues/2)
+- **Lyric check outside Mandarin** (Cantonese first): thresholds and matching are tuned on Mandarin only. [#3](https://github.com/Ornn8/yue2-cover/issues/3)
+- **SheetSage2 half-time / double-time tempo**: `tempo_view` only helps when no clip fits the direct reading. [#4](https://github.com/Ornn8/yue2-cover/issues/4)
+- **ASR misses**: Whisper skips or invents sung lines over dense mixes; forced alignment when lyrics are given is untried. [#5](https://github.com/Ornn8/yue2-cover/issues/5)
+- **More reference voices**: a licence-clean way to build and rank a clip library. [#6](https://github.com/Ornn8/yue2-cover/issues/6)
+- **Japanese / Korean / English syllables**: held-tail ties and syllable counting are Chinese-only. [#7](https://github.com/Ornn8/yue2-cover/issues/7)
+- **An evaluation script** so a change can be compared by numbers instead of by ear. [#8](https://github.com/Ornn8/yue2-cover/issues/8)
+
+Not ported on purpose: a re-sing when the lyric check fails (a production setup had it and switched it off), and voice
+conversion of any kind (the point of this project is that the model sings in the voice itself).
+
 ## Licenses
 
 - This repository's code: Apache License 2.0.
@@ -183,6 +257,12 @@ The code is Apache 2.0, but the model weights are not; see [Licenses](#licenses)
   [YuE license section](https://github.com/multimodal-art-projection/YuE#license)).
   SheetSage2 and MERT-v2 (M-A-P) and the real-audio tokenizer head and NAR LoRA (Mothersuperior): CC BY-NC 4.0.
 - `yue2-infer`: Apache License 2.0. openai-whisper: MIT.
+- Check your own licence: the YuE2 weights are CC BY-NC 4.0 with an additional permission for **individual creators**
+  (companies need a separate license), and that permission is granted by M-A-P, not by this repository. SheetSage2 and MERT2
+  are non-commercial (CC BY-NC 4.0) as well. If you plan to use covers commercially or inside a product, read the licences of
+  every model first; this repository's Apache 2.0 licence covers its code only.
+- The optional lyrics lookup uses a third-party service's unofficial web endpoints and the optional listener sends audio
+  to a model service you choose: you are responsible for their terms.
 - Covering a song does not license the song. Keep covers for personal listening unless you hold the rights.
 
 ## Credits
@@ -219,7 +299,28 @@ The code is Apache 2.0, but the model weights are not; see [Licenses](#licenses)
 3. SheetSage 会把句尾的长音拆成两个同音高的音，YuE 会把最后一个字唱两遍。中文一字一音，只在音符比字多的句子里把句尾同音高的两个音连起来，其他不动。
 4. Whisper 不用前文条件（长歌会循环同一句），每个窗口都带简体中文提示；去掉“作词”“字幕”之类的幻觉，以及中文歌间奏里误识别出的英文。整首识别时 Whisper 偶尔还会漏掉唱出来的句子（有首歌漏了整段主歌，模型在那里拿到 84 个音符却只有 29 个字，字被拉长、抢拍），所以会用乐谱里的人声旋律找出一秒内没有任何字开始的唱段，单独再听一遍（`clip_timestamps`），重听的区间记在 `asr.json` 的 `refilled` 里。能给真实歌词就给。
 5. 参考片段按第一个唱出的音精确对齐，再补到 25 Hz 编码帧边界；避开略长于 30 秒整数倍的长度。
-6. 参数：AR CFG 1.0，NAR 64 步，seed 42。
+6. 参数：AR CFG 1.0，NAR 64 步；seed 每次尝试都重新取（见第 7 条）。
+7. **失败重试**：大约四分之一的渲染会在人声前缀之后 1 到 17 秒就收尾。相同输入和 seed 得到相同结果，所以 `job.py` 最多尝试 3 次，每次换新 seed；
+   `run_cover.py` 在解码前发现不足半首歌（或 10 秒）就直接换下一个 seed，模型不用重新加载。第一个参考片段被拉伸超过 3% 时，最后一次尝试改用速度次接近的片段。
+   每次尝试的 seed、参考片段、时长都记在 `receipt.json`，可以原样重唱。三次都失败则以 `YUE2_EARLY_STOP` 退出。
+8. **切掉接缝**：前缀之后模型常会接着唱一点回声，再留一段静音才进入正曲；成品从最后一段静音之后开始（前 15 秒内，连续 0.4 秒以上低于 -60 dB）。
+9. **带时间的歌词合适就当作计划**：`--lyrics-file` 给的 LRC，或歌词查询得到的带时间歌词，在大部分行与听到的位置一致（允许整体偏移，或几段不同的偏移）时，
+   直接按它的行和时间唱；至少 75% 的听写句在该时间有对应歌词才采用。否则回到听写的行，再用已发布的歌词纠正。
+10. **风格词**：`--arrangement` 原样放进风格行（YuE2 对英文标签最友好）。没给时，可选的“听音员”（任何能听音频的模型）根据 40 秒片段写出标签，会去掉人声相关词；失败就用默认风格。
+11. **歌词可听度检查（可选，只记录）**：`YUE2_COVER_LYRIC_CHECK=1`，只把得分写进 `receipt.json`，不会重新演唱。
+
+**参考片段的选择**：速度在 3% 以内的片段不止一个时，选鼓点占比（`features.py`，频谱里打击成分的比例）最接近原曲的，差距在 0.015 以内的随机选；
+翻唱的伴奏鼓点会跟着参考片段走（我们测得相关系数 0.66–0.75）。速度检测不到任何片段范围内时，先按半速或倍速读一遍。
+`tools/add_reference.py` 会把片段的特征存进 `<参考库>/features.json`（需要 librosa），没有就只按速度选。
+
+**自动风格词（可选）**：不给 `--arrangement` 时，把 `YUE2_COVER_LISTENER` 设为 `模块:函数`，函数签名 `listen(音频字节, mime, 提示词) -> 字符串`，
+接任何能听音频的模型。`yue2_cover/listener_openai.py` 是兼容 OpenAI 接口的完整示例，地址、密钥、模型名都从环境变量读，仓库里不含任何密钥或地址。音频会发给你选的服务，请自行确认其使用条款。
+
+**已知不足与欢迎帮忙**（每项都有带复现步骤的 issue）：参考片段拉得太开时提前收尾；说唱和多重人声；粤语等非普通话的歌词检查；SheetSage2 的半速/倍速节拍；
+Whisper 漏听或编造；更多可合法使用的参考声音；日语、韩语、英语的音节计数和句尾连音；一个能用数字比较改动的评测脚本。
+没有移植的：检查不合格就重唱（线上试过，已关闭）和任何换声方案（本项目的重点就是让模型自己用这个声音唱）。
+
+**许可注意**：代码是 Apache 2.0。YuE2 权重是 CC BY-NC 4.0，另加 M-A-P 对**个人创作者**的额外许可（公司需另行授权）；SheetSage2、MERT2 也是 CC BY-NC。请自行核对你自己的使用场景是否被许可。
 
 **歌词查询（可选，会联网）**：没有给 `--lyrics-file` 时，Whisper 听出的歌词可能有错字、漏字，漏一个字就会空出一个音符。
 此时会把听到的最长三句当作歌词，在网易云音乐的公开网页接口上搜索（每首歌最多搜 3 次、取 8 份歌词），只有至少一半的听写句在候选歌词里

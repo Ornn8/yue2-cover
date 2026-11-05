@@ -15,9 +15,10 @@ Optional lyrics lookup (uses the network): with no lyrics given, the longest hea
 
 ## How it works
 
-- [job.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/job.py): score -> asr -> plan -> encode -> generate, one process per step
-- [plan.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/plan.py): reference choice by tempo, composite ABC score, section-tagged lyrics, held line-end ties
+- [job.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/job.py): features + score -> asr -> lyrics lookup -> style -> plan -> encode -> generate (up to 3 attempts, fresh seeds), one process per step
+- [plan.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/plan.py): reference pick (tempo within 3%, then closest drum share), timed lyrics as the plan when they fit, composite ABC score, section-tagged lyrics, held line-end ties
 - [prefix_sampling.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/prefix_sampling.py): YuE2 semantic sampling with the singer's tokens as forced history
+- [style_words.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/style_words.py), [lyric_check.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/lyric_check.py), [features.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/features.py): optional style listener hook, lyric check, mix features for the reference pick
 - [encode_impl.py](https://github.com/Ornn8/yue2-cover/blob/main/yue2_cover/encode_impl.py): audio -> YuE2 semantic tokens with the community real-audio tokenizer head (MERT-v2 features)
 
 ## Key findings
@@ -28,7 +29,9 @@ Optional lyrics lookup (uses the network): with no lyrics given, the longest hea
 - Whisper without previous-text conditioning; drop credit/subtitle hallucinations and stray English over instrumentals.
 - Whole-song Whisper skips sung lines now and then; sung stretches no word starts near are found from the score's vocal melody and heard again on their own (`clip_timestamps`).
 - Align the reference clip's first sung note to its score; pad to a 25 Hz codec frame boundary.
-- Settings: AR CFG 1.0, NAR 64 ODE steps, seed 42. About real time on an RTX 3090, 8.5 GB peak.
+- A render that stops right after the voice prompt is sung again with a fresh seed (3 attempts; the last may use the next-closest reference clip); the dead air after the prompt is trimmed.
+- Optional: style tags written from the song by any audio model (`YUE2_COVER_LISTENER`), and a recording-only lyric check (`YUE2_COVER_LYRIC_CHECK=1`).
+- Settings: AR CFG 1.0, NAR 64 ODE steps, a fresh seed per attempt. About real time on an RTX 3090, 8.5 GB peak.
 
 ## Other models
 
