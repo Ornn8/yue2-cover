@@ -134,10 +134,11 @@ def test_hear_again_does_not_decode_when_every_note_was_heard():
 
 # --- the step as the job runs it ------------------------------------------------------------------------------
 
-def run_step(monkeypatch, tmp_path, model, *extra):
-    monkeypatch.setitem(sys.modules, 'whisper', types.SimpleNamespace(load_model=lambda name, device: model))
+def run_step(monkeypatch, tmp_path, model, score_dir='', language='zh'):
+    monkeypatch.setitem(sys.modules, 'whisper', types.SimpleNamespace(
+        load_model=lambda name, device: model, load_audio=lambda path: [0.0] * 16000 * 40))
     out = tmp_path / 'asr.json'
-    monkeypatch.setattr(sys, 'argv', ['asr_step.py', str(tmp_path / 'song.wav'), str(out), 'prompt', *extra])
+    monkeypatch.setattr(sys, 'argv', ['asr_step.py', str(tmp_path / 'song.wav'), str(out), 'prompt', score_dir, language])
     asr_step.main()
     return json.loads(out.read_text(encoding='utf-8'))
 
@@ -185,17 +186,18 @@ def test_the_job_gives_the_asr_step_the_score_folder(monkeypatch, tmp_path):
 
     steps = {}
 
-    def fake_step(name, command, work, timeout, log):
+    def fake_step(name, command, work, timeout, log, allow=()):
         steps[name] = [str(part) for part in command]
         if name == 'asr':
             raise Stop
 
     monkeypatch.setattr(job, 'ffmpeg', lambda *args, **kwargs: None)
     monkeypatch.setattr(job, 'step', fake_step)
+    monkeypatch.setattr(job, 'start_features', lambda *args: None)
     work = tmp_path / 'work'
     args = types.SimpleNamespace(source='song.mp3', output=str(tmp_path / 'cover.wav'), work=str(work),
                                  lyrics_file=None, arrangement=None, asr_prompt='prompt')
     with pytest.raises(Stop):
         job.run(args)
-    assert steps['asr'][-2:] == ['prompt', str(work / 'score')]
+    assert steps['asr'][-3:] == ['prompt', str(work / 'score'), '']      # prompt, score folder, no language hint
     assert steps['score'][-1] == str(work / 'score')           # the folder score_step.py writes melody_vocal.lab to

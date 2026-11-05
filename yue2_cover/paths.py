@@ -28,6 +28,7 @@ PYTHON = os.environ.get('YUE2_COVER_PYTHON', sys.executable)
 # SheetSage2 may need its own transformers version; by default the same environment.
 SAGE_PYTHON = os.environ.get('YUE2_COVER_SAGE_PYTHON', PYTHON)
 FFMPEG = os.environ.get('YUE2_COVER_FFMPEG', 'ffmpeg')
+FFPROBE = os.environ.get('YUE2_COVER_FFPROBE', 'ffprobe')
 HF_HOME = Path(os.environ.get('HF_HOME', HOME / 'hf-cache'))
 # With no lyrics given, look the song's published lyrics up on NetEase Cloud Music (needs the network; any failure
 # leaves the heard lyrics). YUE2_COVER_LYRICS_LOOKUP=0 turns it off; job.py --no-lyrics-lookup does so for one run.
@@ -40,3 +41,13 @@ MERT = MODELS / 'MERT-v2-FullSong'
 TOKENIZER_SCRIPTS = TOKENIZER / 'scripts'
 HEAD = TOKENIZER / 'tokenizer_head_joint_v9.safetensors'
 NAR = TOKENIZER / 'nar_lora_joint_v9.safetensors'
+
+# Optional extras (all off unless set):
+# Score the finished cover's words with lyric_check.py (Chinese plans; needs demucs). Recording only: the score goes into
+# receipt.json, the cover is never sung again because of it.
+LYRIC_CHECK = flag('YUE2_COVER_LYRIC_CHECK', default=False)
+# "module:function" of a style listener (see style_words.py, listener_openai.py): with no --arrangement given, the song is
+# listened to and style tags are written from it. Unset: the default arrangement words.
+LISTENER = os.environ.get('YUE2_COVER_LISTENER', '').strip()
+# Fault injection for tests: the first N attempts of a job stop early on purpose (exercises the retry path).
+FAULT_EARLY_STOPS = int(os.environ.get('YUE2_COVER_FAULT_EARLY_STOPS', '0') or 0)

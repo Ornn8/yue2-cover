@@ -34,6 +34,7 @@ TIMEOUT = 6
 BUDGET = 40            # seconds for the whole lookup
 QUERIES = 3
 CANDIDATES = 8
+MIN_HEARD = 5          # different heard lines needed before a song is looked up at all
 ACCEPT = 0.5           # share of the heard lines that must have a close published line
 CLOSE = 0.5            # a heard line this similar to a published one is the same line
 CREDIT = re.compile(r'^\s*[^：:]{1,12}[：:]|【.*】|^\s*\(.*\)\s*$|^\s*（.*）\s*$')
@@ -41,14 +42,18 @@ STAMP = re.compile(r'\[(\d{1,3}):(\d{1,2}(?:\.\d{1,3})?)\]')
 
 
 def heard_lines(asr):
-    """The sung lines Whisper heard that are long enough to search for (credits and subtitle lines left out)."""
+    """Heard lines of at least 4 units, each once: Whisper repeats one hallucinated line many times over a dense mix,
+    and the repeats would match whatever song they resemble. Spaces split Chinese phrases, not English or Korean lines.
+    Credits and subtitle lines are left out."""
     lines = []
     for segment in asr.get('segments', []):
         text = segment.get('text', '')
         if any(x in text for x in NOISE):
             continue
-        lines.extend(p.strip() for p in re.split(r'[，。,.!?！？\s]+', text) if len(WORD.findall(p)) >= 4)
-    return lines
+        cjk = len(re.findall(r'[一-鿿]', text)) >= 0.5 * max(1, len(WORD.findall(text)))
+        parts = re.split(r'[，。,.!?！？\s]+' if cjk else r'[，。,.!?！？]+', text)
+        lines.extend(p.strip() for p in parts if len(WORD.findall(p)) >= 4)
+    return list(dict.fromkeys(lines))
 
 
 def parse_lrc(text):
@@ -56,7 +61,7 @@ def parse_lrc(text):
     out = []
     for raw in text.splitlines():
         stamps = STAMP.findall(raw)
-        words = STAMP.sub('', raw).strip()
+        words = STAMP.sub('', raw).split('	')[0].strip()  # a tab and what follows repeats the line (or translates it)
         if not stamps or not WORD.search(words) or CREDIT.search(words):
             continue
         out.extend((int(m) * 60 + float(s), words) for m, s in stamps)
@@ -93,8 +98,8 @@ def overlap(heard, published):
 def lookup(asr):
     deadline = time.monotonic() + BUDGET
     lines = heard_lines(asr)
-    if not lines:
-        return {'song': None, 'why': 'nothing heard'}
+    if len(lines) < MIN_HEARD:
+        return {'song': None, 'why': 'too little heard', 'heard': len(lines)}
     queries = sorted(dict.fromkeys(lines), key=lambda line: -len(WORD.findall(line)))[:QUERIES]
     candidates = {}
     for query in queries:

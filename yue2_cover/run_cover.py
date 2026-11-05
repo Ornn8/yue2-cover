@@ -9,6 +9,21 @@ import signal
 import time
 import uuid
 
+# An attempt that ends (MUSIC_END) with fewer new frames than config["min_new_frames"] stopped right after the voice
+# prompt (3 of 11 renders, 1.2-16.6 s of a 200+ s song). It is caught before the NAR/VAE decode and the next seed in
+# config["seeds"] is sung with the model still loaded; when every seed stops early the process exits EARLY_STOP_EXIT
+# and output_root/voice-prefix/early-stops.json lists them.
+EARLY_STOP_EXIT = 4
+# Fault injection for tests only: config["fault_early_stops"] = N makes the first N attempts stop after this many
+# new frames (about 2 s), so the retry path can be exercised without waiting for a random early stop.
+FAULT_FRAMES = 50
+
+
+class EarlyStop(Exception):
+    def __init__(self, frames, fault=False):
+        super().__init__(frames)
+        self.frames, self.fault = frames, fault
+
 
 def sha(path):
     with Path(path).open("rb") as stream:
@@ -21,8 +36,17 @@ def read(path):
 
 def validate_inputs(config, request, reference):
     if (request.get("cot") != "full" or not isinstance(request.get("abc"), str) or not request["abc"].strip()
-            or request.get("seed") != 42 or request.get("cfg_scale") != 1.0):
-        raise ValueError("Require this song's complete ABC, cot=full, seed=42 and cfg_scale=1")
+            or isinstance(request.get("seed"), bool) or not isinstance(request.get("seed"), int)
+            or request.get("cfg_scale") != 1.0):
+        raise ValueError("Require this song's complete ABC, cot=full, an integer seed and cfg_scale=1")
+    seeds = config.get("seeds", [request["seed"]])
+    if (not isinstance(seeds, list) or not seeds
+            or any(isinstance(s, bool) or not isinstance(s, int) or not 0 <= s < 2**31 for s in seeds)):
+        raise ValueError("seeds must be a non-empty list of integers")
+    for key in ("min_new_frames", "fault_early_stops"):
+        value = config.get(key, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{key} must be a non-negative integer")
     if (reference.ndim != 1 or reference.dtype.kind not in "iu" or
             len(reference) != config["reference_frames"] or not len(reference) or
             reference.min() < 0 or reference.max() >= 32768):
@@ -48,6 +72,8 @@ def main():
     sampling = resolve_sampling(config["semantic_sampling"], GenerationConfig().semantic)
     if sampling.max_tokens <= len(forced):
         raise ValueError("Total semantic budget must leave room for this song after the reference")
+    seeds = config.get("seeds", [request["seed"]])
+    min_new_frames, faults = config.get("min_new_frames", 0), config.get("fault_early_stops", 0)
     provenance = {
         "phase": args.phase, "arm": "voice-prefix", "request": request,
         "semantic_sampling": dataclasses.asdict(sampling), "forced_frames": len(forced),
@@ -55,6 +81,7 @@ def main():
         "cfg_scale": 1.0, "ode_steps": 64, "ar_regenerated": True, "ar_lora": False, "svc_used": False,
         "script_sha256": sha(__file__), "prefix_adapter_sha256": sha(Path(__file__).with_name("prefix_sampling.py")),
         "nar_merge_sha256": sha(Path(__file__).with_name("nar.py")),
+        "seeds": seeds, "min_new_frames": min_new_frames, "fault_early_stops": faults,
     }
     contract = identity(provenance)
     output = Path(config["output_root"]) / "voice-prefix"
@@ -95,12 +122,21 @@ def main():
             merge_nar(model, nar, torch)
             del nar
 
+            early = []
+
             # This instance always performs new AR; no previous song semantic is loaded.
             def generate(prefix, sampling, seed, phase, **kwargs):
                 if phase != "semantic":
                     raise ValueError("Use the provided complete score; no planner generation")
-                return generate_tokens_with_prefix(model, prefix, sampling, seed, phase,
-                                                   semantic_prefix=forced, use_cuda_graph=True, **kwargs)
+                fault = len(early) < faults
+                if fault:
+                    sampling = dataclasses.replace(sampling, max_tokens=len(forced) + FAULT_FRAMES)
+                history, timing, truncated = generate_tokens_with_prefix(
+                    model, prefix, sampling, seed, phase, semantic_prefix=forced, use_cuda_graph=True, **kwargs)
+                frames = len(history) - len(forced)
+                if fault or (not truncated and frames < min_new_frames):
+                    raise EarlyStop(frames, fault)
+                return history, timing, truncated
 
             pipe._generate = generate
             count = [0]
@@ -111,8 +147,23 @@ def main():
                     print(json.dumps({"event": "tokens", "sampled": count[0], "forced": len(forced),
                                       "seconds": time.perf_counter() - start}), flush=True)
 
-            result = pipe(**request, semantic_sampling=config["semantic_sampling"],
-                          cancelled=lambda: stopped[0], on_token=progress)
+            for seed in seeds:
+                began = time.perf_counter()
+                try:
+                    result = pipe(**{**request, "seed": seed}, semantic_sampling=config["semantic_sampling"],
+                                  cancelled=lambda: stopped[0], on_token=progress)
+                except EarlyStop as stop:
+                    early.append({"seed": seed, "new_frames": stop.frames, "fault": stop.fault,
+                                  "seconds": round(time.perf_counter() - began, 2)})
+                    print(json.dumps({"event": "early_stop", **early[-1]}), flush=True)
+                    if stopped[0]:
+                        raise InterruptedError("Cancelled after an early stop") from None
+                    continue
+                break
+            else:
+                write_json(output / "early-stops.json", {"contract": contract, "early_stops": early,
+                                                         "elapsed_seconds": time.perf_counter() - start})
+                raise SystemExit(EARLY_STOP_EXIT)
             if stopped[0]:
                 raise InterruptedError("Cancelled after audio decode")
             tokens = result.semantic.tokens
@@ -137,7 +188,7 @@ def main():
             "forced_frames": len(forced), "new_frames": len(tokens) - len(forced), "truncated": result.semantic.truncated,
             "peak_allocated_gib": torch.cuda.max_memory_allocated() / 2**30,
             "peak_reserved_gib": torch.cuda.max_memory_reserved() / 2**30,
-            "svc_used": False,
+            "svc_used": False, "seed": seed, "early_stops": early,
         }
         write_json(complete, record)
         print(json.dumps(record), flush=True)

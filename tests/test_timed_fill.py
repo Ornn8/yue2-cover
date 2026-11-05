@@ -228,14 +228,16 @@ def heard_segment(text, start):
             'words': [{'w': ch, 's': start + 0.3 * k, 'e': start + 0.3 * k + 0.25} for k, ch in enumerate(text)]}
 
 
-def build_with(monkeypatch, work, heard, lyrics=''):
+def build_with(monkeypatch, work, heard, lyrics='', timed_plan=False):
     monkeypatch.setattr(plan, 'Score', FakeScore)
     monkeypatch.setattr(plan, 'load_references', lambda: [{'clip': 'ref-1', 'lyrics': ['reference line'], 'true_bpm': 100}])
-    monkeypatch.setattr(plan, 'choose_reference', lambda bpm, refs: (refs[0], 1.0))
+    monkeypatch.setattr(plan, 'choose_reference', lambda bpm, refs, exclude=(): (refs[0], 1.0))
     monkeypatch.setattr(plan, 'reference_plan', lambda ref, text: (
         '% verse\n% verse\n% chorus\n', {'rate': 1.0, 'lead_seconds': 0.0, 'samples': 48000, 'frames': 25,
                                           'boundary_quarters': '0', 'composite_seconds': 100.0}))
     monkeypatch.setattr(plan, 'held_tails', lambda *args: [])
+    if not timed_plan:   # the heard-lines path (the timed lyrics as a plan are tested in test_timed_plan.py)
+        monkeypatch.setattr(plan, 'lrc_fit', lambda *args, **kw: None)
     asr = {'language': 'zh', 'segments': [heard_segment(text, start) for start, text in heard]}
     (work / 'asr.json').write_text(json.dumps(asr, ensure_ascii=False), encoding='utf-8', newline='\n')
     write_lookup(work, {'song': {'id': 22, 'name': 'x', 'artist': 'y'}, 'score': 0.9,

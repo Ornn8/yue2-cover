@@ -23,6 +23,12 @@ import lyrics_step  # noqa: E402
 import paths  # noqa: E402
 import plan  # noqa: E402
 
+@pytest.fixture(autouse=True)
+def few_heard_lines_are_enough(monkeypatch):
+    # The tests hear a handful of lines; production wants MIN_HEARD different ones before it searches at all.
+    monkeypatch.setattr(lyrics_step, 'MIN_HEARD', 1)
+
+
 # An invented "published" song: ten lines, the first sung again as the seventh (a chorus).
 PUBLISHED = ['青石桥边落满了灯笼花', '远处的钟声慢慢地散开', '风把旧信吹到了河对岸', '我数着星星等一场大雾',
              '木窗外的猫还没有睡醒', '谁在街角留下半杯清茶', '青石桥边落满了灯笼花', '纸船漂过了第七个路口',
@@ -282,7 +288,7 @@ def test_lookup_skips_candidates_without_timed_lyrics_and_reports_none_found(mon
 
 def test_lookup_does_not_search_when_nothing_was_heard(monkeypatch):
     service = Service([22], {22: lrc_of(PUBLISHED)}, monkeypatch)
-    assert lyrics_step.lookup({'segments': [{'text': '作词 某人'}, {'text': '好'}]}) == {'song': None, 'why': 'nothing heard'}
+    assert lyrics_step.lookup({'segments': [{'text': '作词 某人'}, {'text': '好'}]}) == {'song': None, 'why': 'too little heard', 'heard': 0}
     assert service.posts == [] and service.gets == []
 
 
@@ -498,7 +504,7 @@ def heard_segment(text, start):
 def build_with(monkeypatch, tmp_path, lookup=None, lyrics=''):
     monkeypatch.setattr(plan, 'Score', FakeScore)
     monkeypatch.setattr(plan, 'load_references', lambda: [{'clip': 'ref-1', 'lyrics': ['reference line'], 'true_bpm': 100}])
-    monkeypatch.setattr(plan, 'choose_reference', lambda bpm, refs: (refs[0], 1.0))
+    monkeypatch.setattr(plan, 'choose_reference', lambda bpm, refs, exclude=(): (refs[0], 1.0))
     monkeypatch.setattr(plan, 'reference_plan', lambda ref, text: (
         '% verse\n% verse\n% chorus\n', {'rate': 1.0, 'lead_seconds': 0.0, 'samples': 48000, 'frames': 25,
                                           'boundary_quarters': '0', 'composite_seconds': 100.0}))
@@ -537,3 +543,16 @@ def test_build_without_a_found_song_sings_what_was_heard(monkeypatch, tmp_path):
 def test_build_never_changes_the_users_own_lyrics(monkeypatch, tmp_path):
     result, text = build_with(monkeypatch, tmp_path, FOUND, lyrics=f'{PUBLISHED[0]}\n{PUBLISHED[3]}\n{PUBLISHED[0]}\n')
     assert result['lyric_source'] == 'user' and 'lyrics_song' not in result
+
+
+def test_too_few_different_heard_lines_are_not_searched(monkeypatch):
+    monkeypatch.setattr(lyrics_step, 'MIN_HEARD', 3)
+    monkeypatch.setattr(lyrics_step, 'post', lambda *args, **kwargs: pytest.fail('no request for a few lines'))
+    asr = {'segments': [{'text': line, 'words': []} for line in PUBLISHED[:2]]}
+    assert lyrics_step.lookup(asr) == {'song': None, 'why': 'too little heard', 'heard': 2}
+
+
+def test_a_line_heard_over_and_over_counts_once_and_a_tab_ends_the_published_line():
+    again = {'segments': [{'text': PUBLISHED[0], 'words': []}] * 6}
+    assert lyrics_step.heard_lines(again) == [PUBLISHED[0]]
+    assert lyrics_step.parse_lrc(f'[00:01.00]{PUBLISHED[0]}	{PUBLISHED[0]} (again)') == [(1.0, PUBLISHED[0])]

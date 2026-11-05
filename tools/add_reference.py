@@ -9,6 +9,10 @@ song's tempo and stretches it at most 1.18x, so a library spanning ~60-120 BPM c
 SheetSage2 transcribes the clip; the clip's tempo comes from its beats, its first sung note from the vocal melody.
 The score keeps one section (labelled verse) and drops trailing bars that are only rests. Check the printed
 numbers; --true-bpm and --first-note-seconds override the measured ones.
+
+The clip's mix measures (features.py: drum share, brightness ...) are stored in <references>/features.json; the reference
+pick uses the drum share to prefer, among clips within 3% of a song's tempo, the one whose drums are closest to the
+song's. Without them (numpy/scipy/librosa missing) the pick is by tempo only. Re-run for clips added by an older version.
 """
 import argparse
 import json
@@ -73,6 +77,20 @@ def seconds(path):
     return float(out.stdout.strip())
 
 
+def measure_clip(clip, clip_id, root):
+    """Store features.measure(clip) under clip_id in <references>/features.json; a failure only leaves it out."""
+    try:
+        from features import measure
+        found = measure(clip)
+    except Exception as error:  # missing librosa/scipy, a broken file: the pick falls back to tempo only
+        print(f'Note: no mix measures stored for {clip_id} ({type(error).__name__}); the pick is by tempo for it.')
+        return
+    index = root / 'features.json'
+    table = json.loads(index.read_text(encoding='utf-8')) if index.exists() else {}
+    table[clip_id] = found
+    index.write_text(json.dumps(table, indent=1), encoding='utf-8')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--clip', required=True, type=Path)
@@ -111,6 +129,7 @@ def main():
     (root / args.id / 'score.abc').write_text(text, encoding='utf-8')
     (root / 'clips').mkdir(exist_ok=True)
     shutil.copyfile(args.clip, root / entry['path'])
+    measure_clip(args.clip, args.id, root)
     index = root / 'refs.json'
     refs = json.loads(index.read_text(encoding='utf-8')) if index.exists() else []
     refs = [r for r in refs if r['clip'] != args.id] + [entry]
