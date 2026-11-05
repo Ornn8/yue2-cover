@@ -1,5 +1,7 @@
 # yue2-cover: AI song covers in your singer's voice with YuE2
 
+**[Listen to the demo](https://ornn8.github.io/yue2-cover/demo/)** · 试听：同一段副歌，原唱与两种嗓音的翻唱对比。
+
 **yue2-cover** is an open-source pipeline for **AI cover songs**: it re-sings any song in **your singer's voice** over
 a **newly generated arrangement**, while keeping the song's original melody, lyrics and structure. It runs locally on
 one GPU (tested on an RTX 3090) and is built on [YuE2](https://github.com/multimodal-art-projection/YuE) by M-A-P,

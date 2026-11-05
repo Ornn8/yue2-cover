@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>yue2-cover demo</title>
+<style>
+:root{--bg:#fff;--fg:#14213d;--mut:#5b6b8c;--line:#d6e0f5;--acc:#2563eb;--soft:#eef4ff}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1626;--fg:#e6eefc;--mut:#9fb2d6;--line:#25354f;--acc:#6ea0ff;--soft:#15213a}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
+main{max-width:980px;margin:0 auto;padding:24px 16px 48px}
+h1{margin:0 0 4px;font-size:1.6rem} p{color:var(--mut);margin:.4em 0} a{color:var(--acc)}
+table{width:100%;border-collapse:collapse;margin-top:20px}
+th,td{border-bottom:1px solid var(--line);padding:12px 8px;text-align:left;vertical-align:middle}
+thead th{background:var(--soft);font-size:.9rem} audio{width:100%;min-width:200px} .na{color:var(--mut)}
+@media(max-width:720px){thead{display:none} tr{display:block;border:1px solid var(--line);border-radius:10px;margin:14px 0;padding:6px 10px}
+td,th{display:block;border:0;padding:6px 0} td::before{content:attr(data-l);display:block;font-size:.8rem;color:var(--mut)}}
+</style></head><body><main>
+<h1>yue2-cover 试听 / Listen to the demo</h1>
+<p>同一段副歌，三种听法：原唱，以及用 <a href="https://github.com/Ornn8/yue2-cover">yue2-cover</a> 以两种不同嗓音重新演唱的版本（约 35 秒节选）。</p>
+<p>The same chorus, three ways: the original recording, and our cover sung by the pipeline in two different voices (about 35 s excerpts). Original excerpts are for comparison only; all rights belong to their owners.</p>
+<table><thead><tr><th>歌曲 / Song</th><th>原唱 / Original</th><th>Voice A (林离)</th><th>Voice B (大肥鱼·高冷慵懒少女)</th></tr></thead><tbody>
+<tr><th scope="row"><b>晴天</b><br>Sunny Day<br><small>周杰伦 / Jay Chou</small></th><td data-l="原唱 Original"><audio controls preload="none" src="qingtian-original.mp3"></audio></td><td data-l="Voice A (林离)"><audio controls preload="none" src="qingtian-A.mp3"></audio></td><td data-l="Voice B (大肥鱼·高冷慵懒少女)"><audio controls preload="none" src="qingtian-B.mp3"></audio></td></tr>
+<tr><th scope="row"><b>体面</b><br>A Dignified Farewell (Timian)<br><small>于文文 / Yu Wenwen</small></th><td data-l="原唱 Original"><audio controls preload="none" src="tiimian-original.mp3"></audio></td><td data-l="Voice A (林离)"><audio controls preload="none" src="tiimian-A.mp3"></audio></td><td data-l="Voice B (大肥鱼·高冷慵懒少女)"><audio controls preload="none" src="tiimian-B.mp3"></audio></td></tr>
+<tr><th scope="row"><b>九万字</b><br>Ninety Thousand Words<br><small>黄诗扶 / Huang Shifu</small></th><td data-l="原唱 Original"><audio controls preload="none" src="jiuwanzi-original.mp3"></audio></td><td data-l="Voice A (林离)"><audio controls preload="none" src="jiuwanzi-A.mp3"></audio></td><td data-l="Voice B (大肥鱼·高冷慵懒少女)"><audio controls preload="none" src="jiuwanzi-B.mp3"></audio></td></tr>
+<tr><th scope="row"><b>Lemon</b><br>Lemon<br><small>米津玄師 / Kenshi Yonezu</small></th><td data-l="原唱 Original"><audio controls preload="none" src="lemon-original.mp3"></audio></td><td data-l="Voice A (林离)"><audio controls preload="none" src="lemon-A.mp3"></audio></td><td data-l="Voice B (大肥鱼·高冷慵懒少女)"><audio controls preload="none" src="lemon-B.mp3"></audio></td></tr>
+<tr><th scope="row"><b>FIRESTARTER</b><br>FIRESTARTER<br><small>K/DA / K/DA</small></th><td data-l="原唱 Original"><audio controls preload="none" src="firestarter-original.mp3"></audio></td><td data-l="Voice A (林离)"><audio controls preload="none" src="firestarter-A.mp3"></audio></td><td data-l="Voice B (大肥鱼·高冷慵懒少女)"><audio controls preload="none" src="firestarter-B.mp3"></audio></td></tr>
+</tbody></table>
+<p><small>每个版本都是把原曲的一小段送入流水线后得到的结果，未做人工修音。 Each cover is the raw pipeline output for a short cut of the song, with no manual tuning.</small></p>
+</main></body></html>
