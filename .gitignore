@@ -5,3 +5,4 @@ work/
 *.flac
 *.mp3
 *.npy
+!demo/*.mp3
